@@ -15,6 +15,7 @@ api_router.include_router(
     users.router,
     prefix="/users",
     tags=["Users"],
+    include_in_schema=False,
 )
 
 api_router.include_router(
@@ -27,6 +28,7 @@ api_router.include_router(
     kandangs.router,
     prefix="/kandangs",
     tags=["Kandangs"],
+    include_in_schema=False,
 )
 
 api_router.include_router(
