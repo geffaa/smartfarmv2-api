@@ -1,3 +1,4 @@
+import datetime
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -60,12 +61,14 @@ async def get_today_log(
 async def list_daily_logs(
     page: int = Query(1, ge=1),
     per_page: int = Query(30, ge=1, le=100),
+    start_date: datetime.date = Query(None, description="Filter dari tanggal (YYYY-MM-DD)"),
+    end_date: datetime.date = Query(None, description="Filter hingga tanggal (YYYY-MM-DD)"),
     current_user: User = Depends(get_current_user),
     kandang: Kandang = Depends(get_single_kandang),
     db: AsyncSession = Depends(get_db),
 ):
     service = DailyLogService(db)
-    items, total = await service.get_list(kandang.id, page, per_page)
+    items, total = await service.get_list(kandang.id, page, per_page, start_date, end_date)
     return success_response(
         data=DailyLogListResponse(
             items=[DailyLogResponse.model_validate(item) for item in items],

@@ -9,6 +9,7 @@ from app.models.daily_log import DailyLog
 from app.schemas.daily_log import DailyLogCreate
 
 
+
 class DailyLogService:
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -64,15 +65,23 @@ class DailyLogService:
         kandang_id: uuid.UUID,
         page: int = 1,
         per_page: int = 30,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
     ) -> tuple[List[DailyLog], int]:
+        filters = [DailyLog.kandang_id == kandang_id]
+        if start_date:
+            filters.append(DailyLog.date >= start_date)
+        if end_date:
+            filters.append(DailyLog.date <= end_date)
+
         count_result = await self.db.execute(
-            select(func.count(DailyLog.id)).where(DailyLog.kandang_id == kandang_id)
+            select(func.count(DailyLog.id)).where(*filters)
         )
         total = count_result.scalar() or 0
 
         result = await self.db.execute(
             select(DailyLog)
-            .where(DailyLog.kandang_id == kandang_id)
+            .where(*filters)
             .order_by(desc(DailyLog.date))
             .offset((page - 1) * per_page)
             .limit(per_page)
