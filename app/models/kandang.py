@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional, TYPE_CHECKING
 
-from sqlalchemy import String, Boolean, DateTime, ForeignKey, Text, func
+from sqlalchemy import String, Boolean, DateTime, ForeignKey, Text, func, Date
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -49,6 +49,10 @@ class Kandang(Base):
         Boolean,
         default=True,
         nullable=False,
+    )
+    tanggal_mulai_siklus: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
     )
     
     # Owner of the kandang

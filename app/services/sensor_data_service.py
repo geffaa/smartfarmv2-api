@@ -220,16 +220,22 @@ class SensorDataService:
 
         return sampled[-n_points:]
 
-    async def get_hari_ke(self, kandang_id: uuid.UUID) -> int:
-        """Auto-calculate current day number based on first reading for this kandang."""
-        result = await self.db.execute(
-            select(func.min(SensorData.timestamp))
-            .where(SensorData.kandang_id == kandang_id)
-        )
-        first_timestamp = result.scalar_one_or_none()
-        if not first_timestamp:
-            return 1
-        delta = datetime.utcnow() - first_timestamp.replace(tzinfo=None)
+    async def get_hari_ke(self, kandang_id: uuid.UUID, tanggal_mulai_siklus=None) -> int:
+        """Hitung hari ke- berdasarkan tanggal_mulai_siklus kandang.
+        Fallback ke data sensor pertama jika tanggal_mulai_siklus belum di-set."""
+        if tanggal_mulai_siklus is not None:
+            start = tanggal_mulai_siklus.replace(tzinfo=None)
+        else:
+            result = await self.db.execute(
+                select(func.min(SensorData.timestamp))
+                .where(SensorData.kandang_id == kandang_id)
+            )
+            start = result.scalar_one_or_none()
+            if not start:
+                return 1
+            start = start.replace(tzinfo=None)
+
+        delta = datetime.utcnow() - start
         return max(1, delta.days + 1)
 
     async def delete(self, sensor_data_id: uuid.UUID) -> bool:

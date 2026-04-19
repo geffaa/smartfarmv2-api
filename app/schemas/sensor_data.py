@@ -44,7 +44,6 @@ class SensorDataCreate(BaseModel):
 
 class SensorDataIoTCreate(BaseModel):
     """Schema for IoT device submissions (ESP32). Uses English field names."""
-    kandang_id: uuid.UUID = Field(..., description="ID kandang yang dipasang sensor")
     temperature: float = Field(..., ge=0, le=60, description="Suhu (°C)")
     humidity: float = Field(..., ge=0, le=100, description="Kelembaban (%)")
     ammonia: float = Field(..., ge=0, description="Amonia (ppm)")
@@ -52,7 +51,6 @@ class SensorDataIoTCreate(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "kandang_id": "550e8400-e29b-41d4-a716-446655440000",
                 "temperature": 28.5,
                 "humidity": 75.0,
                 "ammonia": 3.5,

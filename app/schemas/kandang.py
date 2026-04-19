@@ -35,12 +35,13 @@ class KandangCreate(KandangBase):
 
 class KandangUpdate(BaseModel):
     """Schema for updating kandang."""
-    
+
     nama: Optional[str] = Field(default=None, min_length=1, max_length=100)
     lokasi: Optional[str] = Field(default=None, max_length=255)
     kapasitas: Optional[int] = Field(default=None, ge=0)
     deskripsi: Optional[str] = Field(default=None)
     is_active: Optional[bool] = Field(default=None)
+    tanggal_mulai_siklus: Optional[datetime] = Field(default=None, description="Tanggal mulai siklus panen. Set untuk reset hari_ke ke 1.")
 
 
 class KandangResponse(BaseModel):
@@ -61,6 +62,8 @@ class KandangResponse(BaseModel):
     
     # Include pemilik info
     pemilik_name: Optional[str] = None
+
+    tanggal_mulai_siklus: Optional[datetime] = None
 
     # Latest sensor data (untuk stats card di dashboard)
     latest_sensor: Optional[LatestSensorSnapshot] = None

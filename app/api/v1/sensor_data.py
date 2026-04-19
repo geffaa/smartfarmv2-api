@@ -18,7 +18,6 @@ from app.schemas.sensor_data import (
     SensorDataStats,
 )
 from app.services.sensor_data_service import SensorDataService
-from app.services.kandang_service import KandangService
 from app.api.deps import get_current_user, get_iot_auth, get_single_kandang
 
 router = APIRouter()
@@ -34,6 +33,7 @@ router = APIRouter()
 async def create_sensor_data_iot(
     data: SensorDataIoTCreate,
     _: str = Depends(get_iot_auth),
+    kandang: Kandang = Depends(get_single_kandang),
     db: AsyncSession = Depends(get_db),
 ):
     from app.ml.model_loader import predict_classification, predict_forecasting
@@ -43,13 +43,8 @@ async def create_sensor_data_iot(
 
     logger = logging.getLogger(__name__)
 
-    kandang_service = KandangService(db)
-    kandang = await kandang_service.get_by_id(data.kandang_id)
-    if not kandang:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Kandang tidak ditemukan")
-
     sensor_service = SensorDataService(db)
-    hari_ke = await sensor_service.get_hari_ke(data.kandang_id)
+    hari_ke = await sensor_service.get_hari_ke(kandang.id, kandang.tanggal_mulai_siklus)
 
     sensor_create = SensorDataCreate(
         timestamp=datetime.now(),
@@ -58,7 +53,7 @@ async def create_sensor_data_iot(
         kelembaban=data.humidity,
         amoniak=data.ammonia,
     )
-    sensor_data = await sensor_service.create(sensor_create, kandang_id=data.kandang_id)
+    sensor_data = await sensor_service.create(sensor_create, kandang_id=kandang.id)
 
     auto_prediction_results = {}
 
@@ -85,7 +80,7 @@ async def create_sensor_data_iot(
         try:
             prediction_svc = PredictionService(db)
             await prediction_svc.save_classification(
-                kandang_id=data.kandang_id,
+                kandang_id=kandang.id,
                 prediction=cls_result['class'],
                 confidence=cls_result['confidence'],
                 input_data={"suhu": data.temperature, "kelembaban": data.humidity, "amoniak": data.ammonia, "hari_ke": hari_ke, "source": "iot_auto"},
@@ -99,7 +94,7 @@ async def create_sensor_data_iot(
                 notification_service = NotificationService(db)
                 await notification_service.create_classification_alert(
                     user_id=kandang.pemilik_id,
-                    kandang_id=data.kandang_id,
+                    kandang_id=kandang.id,
                     prediction=cls_result['class'],
                     confidence=cls_result['confidence'],
                     sensor_data=features,
@@ -111,7 +106,7 @@ async def create_sensor_data_iot(
         auto_prediction_results["classification"] = {"error": str(e)}
 
     try:
-        recent_data = await sensor_service.get_latest_at_interval(kandang_id=data.kandang_id, n_points=4, interval_minutes=30)
+        recent_data = await sensor_service.get_latest_at_interval(kandang_id=kandang.id, n_points=4, interval_minutes=30)
         if len(recent_data) >= 4:
             sensor_history = [
                 {'temp': sd.suhu, 'hum': sd.kelembaban, 'ammo': sd.amoniak, 'Death': sd.death or 0}
@@ -126,7 +121,7 @@ async def create_sensor_data_iot(
             try:
                 prediction_svc = PredictionService(db)
                 await prediction_svc.save_forecasting(
-                    kandang_id=data.kandang_id,
+                    kandang_id=kandang.id,
                     predicted_death=fc_result['predicted_death'],
                     raw_prediction=fc_result['raw_prediction'],
                     input_data={"sensor_history": sensor_history, "source": "iot_auto"},
@@ -140,7 +135,7 @@ async def create_sensor_data_iot(
                     notification_service = NotificationService(db)
                     await notification_service.create_death_forecast_alert(
                         user_id=kandang.pemilik_id,
-                        kandang_id=data.kandang_id,
+                        kandang_id=kandang.id,
                         predicted_death=fc_result['predicted_death'],
                         raw_prediction=fc_result['raw_prediction'],
                     )
@@ -158,7 +153,7 @@ async def create_sensor_data_iot(
             "type": "sensor_data",
             "data": {
                 "id": str(sensor_data.id),
-                "kandang_id": str(sensor_data.kandang_id),
+                "kandang_id": str(kandang.id),
                 "timestamp": sensor_data.timestamp.isoformat(),
                 "hari_ke": sensor_data.hari_ke,
                 "suhu": sensor_data.suhu,
@@ -272,7 +267,7 @@ async def create_sensor_data(
             "type": "sensor_data",
             "data": {
                 "id": str(sensor_data.id),
-                "kandang_id": str(sensor_data.kandang_id),
+                "kandang_id": str(kandang.id),
                 "timestamp": sensor_data.timestamp.isoformat() if sensor_data.timestamp else None,
                 "hari_ke": sensor_data.hari_ke,
                 "suhu": sensor_data.suhu,
