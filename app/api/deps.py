@@ -3,16 +3,17 @@ from typing import Optional, Dict, Any
 
 from fastapi import Depends, HTTPException, status, Request, Header
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.user import User, UserRole
+from app.models.kandang import Kandang
 from app.services.user_service import UserService
 from app.core.security import verify_token
 from app.config import get_settings
 
 
-# HTTP Bearer token security
 security = HTTPBearer()
 
 
@@ -105,6 +106,19 @@ async def get_iot_auth(
             detail="Invalid IoT API key",
         )
     return x_api_key
+
+
+async def get_single_kandang(db: AsyncSession = Depends(get_db)) -> Kandang:
+    result = await db.execute(
+        select(Kandang).where(Kandang.is_active == True).limit(1)
+    )
+    kandang = result.scalar_one_or_none()
+    if not kandang:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Kandang tidak ditemukan",
+        )
+    return kandang
 
 
 async def get_request_info(request: Request) -> Dict[str, Any]:

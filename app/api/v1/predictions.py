@@ -15,7 +15,8 @@ from app.schemas.base import BaseResponse, success_response
 from app.services.activity_log_service import ActivityLogService
 from app.services.notification_service import NotificationService
 from app.services.prediction_service import PredictionService
-from app.api.deps import get_current_user, get_request_info
+from app.models.kandang import Kandang
+from app.api.deps import get_current_user, get_request_info, get_single_kandang
 from app.ml.model_loader import predict_classification, predict_forecasting, load_models
 import uuid
 
@@ -27,19 +28,17 @@ router = APIRouter()
 # ============================================
 
 class ClassificationRequest(BaseModel):
-    """Request schema for classification prediction."""
-    hari_ke: int = Field(..., ge=1, description="Hari ke- dalam siklus pemeliharaan")
-    suhu: float = Field(..., ge=0, le=60, description="Temperature (°C)")
-    kelembaban: float = Field(..., ge=0, le=100, description="Humidity (%)")
-    amoniak: float = Field(..., ge=0, description="Ammonia level (ppm)")
-    pakan: float = Field(..., ge=0, description="Pakan (gram per ekor)")
-    minum: float = Field(..., ge=0, description="Minum (ml per ekor)")
-    bobot: float = Field(..., ge=0, description="Bobot rata-rata ayam (gram)")
-    populasi: int = Field(..., ge=1, description="Jumlah populasi ayam")
-    luas_kandang: float = Field(..., gt=0, description="Luas kandang (m²)")
-    hour: int = Field(..., ge=0, le=23, description="Jam pengukuran (0-23)")
-    kandang_id: Optional[str] = Field(default=None, description="Kandang ID")
-    
+    hari_ke: int = Field(..., ge=1)
+    suhu: float = Field(..., ge=0, le=60)
+    kelembaban: float = Field(..., ge=0, le=100)
+    amoniak: float = Field(..., ge=0)
+    pakan: float = Field(..., ge=0)
+    minum: float = Field(..., ge=0)
+    bobot: float = Field(..., ge=0)
+    populasi: int = Field(..., ge=1)
+    luas_kandang: float = Field(..., gt=0)
+    hour: int = Field(..., ge=0, le=23)
+
     class Config:
         json_schema_extra = {
             "example": {
@@ -53,7 +52,6 @@ class ClassificationRequest(BaseModel):
                 "populasi": 8000,
                 "luas_kandang": 336,
                 "hour": 10,
-                "kandang_id": None
             }
         }
 
@@ -67,18 +65,8 @@ class SensorDataPoint(BaseModel):
 
 
 class ForecastingRequest(BaseModel):
-    """Request schema for forecasting prediction.
-    
-    Requires 4 data points (2 hours of data at 30-min intervals).
-    """
-    sensor_history: List[SensorDataPoint] = Field(
-        ...,
-        min_length=4,
-        max_length=10,
-        description="4 recent sensor readings (2 hours at 30-min intervals)"
-    )
-    kandang_id: Optional[str] = Field(default=None, description="Kandang ID")
-    
+    sensor_history: List[SensorDataPoint] = Field(..., min_length=4, max_length=10)
+
     class Config:
         json_schema_extra = {
             "example": {
@@ -87,8 +75,7 @@ class ForecastingRequest(BaseModel):
                     {"temp": 27.8, "hum": 71.5, "ammo": 3.4, "Death": 0},
                     {"temp": 28.0, "hum": 70.0, "ammo": 3.6, "Death": 1},
                     {"temp": 28.2, "hum": 69.5, "ammo": 3.8, "Death": 0}
-                ],
-                "kandang_id": None
+                ]
             }
         }
 
@@ -132,6 +119,7 @@ async def classify_condition(
     request: Request,
     data: ClassificationRequest,
     current_user: User = Depends(get_current_user),
+    kandang: Kandang = Depends(get_single_kandang),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -180,12 +168,11 @@ async def classify_condition(
             },
         )
         
-        # Trigger notification if abnormal
-        if prediction_result.is_abnormal and data.kandang_id:
+        if prediction_result.is_abnormal:
             notification_service = NotificationService(db)
             await notification_service.create_classification_alert(
                 user_id=current_user.id,
-                kandang_id=uuid.UUID(data.kandang_id),
+                kandang_id=kandang.id,
                 prediction=prediction_result.prediction,
                 confidence=prediction_result.confidence,
                 sensor_data=features,
@@ -213,6 +200,7 @@ async def forecast_mortality(
     request: Request,
     data: ForecastingRequest,
     current_user: User = Depends(get_current_user),
+    kandang: Kandang = Depends(get_single_kandang),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -256,12 +244,11 @@ async def forecast_mortality(
             },
         )
         
-        # Trigger notification if death predicted
-        if forecast_result.has_risk and data.kandang_id:
+        if forecast_result.has_risk:
             notification_service = NotificationService(db)
             await notification_service.create_death_forecast_alert(
                 user_id=current_user.id,
-                kandang_id=uuid.UUID(data.kandang_id),
+                kandang_id=kandang.id,
                 predicted_death=forecast_result.predicted_death,
                 raw_prediction=forecast_result.raw_prediction,
             )
@@ -372,16 +359,16 @@ async def reload_models(
     description="Riwayat hasil prediksi ML dari IoT (classification & forecasting)",
 )
 async def get_prediction_history(
-    kandang_id: uuid.UUID,
     type: Optional[str] = None,
     limit: int = 50,
     _: User = Depends(get_current_user),
+    kandang: Kandang = Depends(get_single_kandang),
     db: AsyncSession = Depends(get_db),
 ):
     import json
 
     svc = PredictionService(db)
-    records = await svc.get_history(kandang_id, limit=limit, prediction_type=type)
+    records = await svc.get_history(kandang.id, limit=limit, prediction_type=type)
 
     data = []
     for r in records:

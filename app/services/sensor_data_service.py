@@ -24,13 +24,13 @@ class SensorDataService:
         self.db = db
     
     async def create(
-        self, 
+        self,
         data: SensorDataCreate,
+        kandang_id: uuid.UUID,
         recorded_by: Optional[uuid.UUID] = None
     ) -> SensorData:
-        """Create new sensor data record."""
         sensor_data = SensorData(
-            kandang_id=data.kandang_id,
+            kandang_id=kandang_id,
             timestamp=data.timestamp,
             hari_ke=data.hari_ke,
             suhu=data.suhu,

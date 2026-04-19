@@ -2,10 +2,12 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.user import User, UserRole
+from app.models.kandang import Kandang
 from app.schemas.kandang import KandangCreate, KandangUpdate, KandangResponse
 from app.schemas.base import (
     BaseResponse,
@@ -22,7 +24,32 @@ router = APIRouter()
 
 
 @router.get(
+    "/me",
+    response_model=BaseResponse[KandangResponse],
+    summary="Get Kandang",
+    description="Get detail kandang aktif",
+)
+async def get_my_kandang(
+    _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    kandang_service = KandangService(db)
+    result = await db.execute(select(Kandang).where(Kandang.is_active == True).limit(1))
+    kandang = result.scalar_one_or_none()
+    if not kandang:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Kandang tidak ditemukan")
+
+    response = KandangResponse.model_validate(kandang)
+    if kandang.pemilik:
+        response.pemilik_name = kandang.pemilik.full_name
+    response.latest_sensor = await kandang_service.get_latest_sensor(kandang.id)
+
+    return success_response(data=response, message="Data kandang berhasil diambil")
+
+
+@router.get(
     "",
+    include_in_schema=False,
     response_model=PaginatedResponse[KandangResponse],
     summary="List Kandangs",
     description="Get paginated list of kandangs",
@@ -86,6 +113,7 @@ async def list_kandangs(
 
 @router.get(
     "/{kandang_id}",
+    include_in_schema=False,
     response_model=BaseResponse[KandangResponse],
     summary="Get Kandang",
     description="Get kandang by ID",
@@ -132,6 +160,7 @@ async def get_kandang(
 
 @router.post(
     "",
+    include_in_schema=False,
     response_model=BaseResponse[KandangResponse],
     status_code=status.HTTP_201_CREATED,
     summary="Create Kandang",
@@ -195,6 +224,7 @@ async def create_kandang(
 
 @router.put(
     "/{kandang_id}",
+    include_in_schema=False,
     response_model=BaseResponse[KandangResponse],
     summary="Update Kandang",
     description="Update kandang data",
@@ -248,6 +278,7 @@ async def update_kandang(
 
 @router.delete(
     "/{kandang_id}",
+    include_in_schema=False,
     response_model=BaseResponse,
     summary="Delete Kandang",
     description="Soft delete (deactivate) a kandang",

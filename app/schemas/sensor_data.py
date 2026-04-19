@@ -13,25 +13,20 @@ from pydantic import BaseModel, Field, ConfigDict
 # ============================================
 
 class SensorDataCreate(BaseModel):
-    """Schema for creating new sensor data (from IoT device)."""
-    kandang_id: uuid.UUID = Field(..., description="ID of the kandang")
     timestamp: datetime = Field(..., description="Recording timestamp")
     hari_ke: int = Field(..., ge=1, description="Day number in cycle")
     suhu: float = Field(..., ge=0, le=60, description="Temperature (°C)")
     kelembaban: float = Field(..., ge=0, le=100, description="Humidity (%)")
     amoniak: float = Field(..., ge=0, description="Ammonia level (ppm)")
-    
-    # Optional manual fields (can be filled later)
-    pakan: Optional[float] = Field(default=None, ge=0, description="Feed per chicken (gram)")
-    minum: Optional[float] = Field(default=None, ge=0, description="Water per chicken (ml)")
-    bobot: Optional[float] = Field(default=None, ge=0, description="Average weight (gram)")
-    populasi: Optional[int] = Field(default=None, ge=1, description="Population count")
-    death: int = Field(default=0, ge=0, description="Deaths in this interval")
-    
+    pakan: Optional[float] = Field(default=None, ge=0)
+    minum: Optional[float] = Field(default=None, ge=0)
+    bobot: Optional[float] = Field(default=None, ge=0)
+    populasi: Optional[int] = Field(default=None, ge=1)
+    death: int = Field(default=0, ge=0)
+
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "kandang_id": "550e8400-e29b-41d4-a716-446655440000",
                 "timestamp": "2026-01-19T10:30:00+07:00",
                 "hari_ke": 5,
                 "suhu": 28.5,
