@@ -12,6 +12,6 @@ SELECT
     NOW(),
     NOW()
 FROM users
-WHERE role = 'admin'
+WHERE role = 'ADMIN'
 LIMIT 1
 ON CONFLICT (kode) DO NOTHING;
