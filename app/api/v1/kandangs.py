@@ -3,6 +3,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -34,7 +35,12 @@ async def get_my_kandang(
     db: AsyncSession = Depends(get_db),
 ):
     kandang_service = KandangService(db)
-    result = await db.execute(select(Kandang).where(Kandang.is_active == True).limit(1))
+    result = await db.execute(
+        select(Kandang)
+        .options(selectinload(Kandang.pemilik))
+        .where(Kandang.is_active == True)
+        .limit(1)
+    )
     kandang = result.scalar_one_or_none()
     if not kandang:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Kandang tidak ditemukan")
