@@ -39,6 +39,7 @@ async def create_sensor_data_iot(
     from app.ml.model_loader import predict_classification, predict_forecasting
     from app.services.notification_service import NotificationService
     from app.services.prediction_service import PredictionService
+    from app.services.death_report_service import DeathReportService
     import logging
 
     logger = logging.getLogger(__name__)
@@ -46,12 +47,16 @@ async def create_sensor_data_iot(
     sensor_service = SensorDataService(db)
     hari_ke = await sensor_service.get_hari_ke(kandang.id, kandang.tanggal_mulai_siklus)
 
+    death_service = DeathReportService(db)
+    today_deaths = await death_service.get_total_today(kandang.id)
+
     sensor_create = SensorDataCreate(
         timestamp=datetime.now(),
         hari_ke=hari_ke,
         suhu=data.temperature,
         kelembaban=data.humidity,
         amoniak=data.ammonia,
+        death=today_deaths,
     )
     sensor_data = await sensor_service.create(sensor_create, kandang_id=kandang.id)
 
@@ -67,6 +72,7 @@ async def create_sensor_data_iot(
             'Minum': 0,
             'Bobot': 0,
             'Populasi': 0,
+            'Death': today_deaths,
             'Luas Kandang': kandang.kapasitas / 10 if kandang.kapasitas else 120,
             'Hour': sensor_data.timestamp.hour,
         }

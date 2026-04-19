@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import auth, users, activity_logs, kandangs, predictions, sensor_data, notifications
+from app.api.v1 import auth, users, activity_logs, kandangs, predictions, sensor_data, notifications, death_reports, daily_logs
 
 api_router = APIRouter()
 
@@ -46,4 +46,16 @@ api_router.include_router(
     notifications.router,
     prefix="/notifications",
     tags=["Notifications"],
+)
+
+api_router.include_router(
+    death_reports.router,
+    prefix="/death-reports",
+    tags=["Death Reports"],
+)
+
+api_router.include_router(
+    daily_logs.router,
+    prefix="/daily-logs",
+    tags=["Daily Logs"],
 )
