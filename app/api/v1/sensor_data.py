@@ -1,6 +1,6 @@
 import uuid
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -106,8 +106,23 @@ async def create_sensor_data_iot(
         auto_prediction_results["classification"] = {"error": str(e)}
 
     try:
+        from app.models.prediction import Prediction
+        from sqlalchemy import select as sa_select, desc as sa_desc
+
+        last_fc_result = await db.execute(
+            sa_select(Prediction.created_at)
+            .where(Prediction.kandang_id == kandang.id, Prediction.type == "forecasting")
+            .order_by(sa_desc(Prediction.created_at))
+            .limit(1)
+        )
+        last_fc_time = last_fc_result.scalar_one_or_none()
+        forecast_cooldown_ok = (
+            last_fc_time is None or
+            (datetime.utcnow() - last_fc_time.replace(tzinfo=None)) >= timedelta(minutes=120)
+        )
+
         recent_data = await sensor_service.get_latest_at_interval(kandang_id=kandang.id, n_points=4, interval_minutes=30)
-        if len(recent_data) >= 4:
+        if len(recent_data) >= 4 and forecast_cooldown_ok:
             sensor_history = [
                 {'temp': sd.suhu, 'hum': sd.kelembaban, 'ammo': sd.amoniak, 'Death': sd.death or 0}
                 for sd in recent_data[-4:]
