@@ -50,6 +50,14 @@ async def create_sensor_data_iot(
     death_service = DeathReportService(db)
     today_deaths = await death_service.get_total_today(kandang.id)
 
+    # Death per-interval (delta sejak reading sebelumnya) untuk forecasting window
+    last_readings = await sensor_service.get_latest(kandang.id, limit=1)
+    last_reading_time = last_readings[-1].timestamp if last_readings else None
+    if last_reading_time:
+        death_delta = await death_service.get_since(kandang.id, last_reading_time.replace(tzinfo=None))
+    else:
+        death_delta = today_deaths
+
     from app.services.daily_log_service import DailyLogService
     daily_log_service = DailyLogService(db)
     today_log = await daily_log_service.get_today(kandang.id)
@@ -61,7 +69,7 @@ async def create_sensor_data_iot(
         suhu=data.temperature,
         kelembaban=data.humidity,
         amoniak=data.ammonia,
-        death=today_deaths,
+        death=death_delta,
         populasi=today_populasi,
     )
     sensor_data = await sensor_service.create(sensor_create, kandang_id=kandang.id)

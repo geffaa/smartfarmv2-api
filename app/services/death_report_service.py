@@ -44,6 +44,19 @@ class DeathReportService:
         )
         return int(result.scalar() or 0)
 
+    async def get_since(self, kandang_id: uuid.UUID, since: datetime) -> int:
+        """Deaths reported since a specific timestamp (for per-interval delta)."""
+        result = await self.db.execute(
+            select(func.coalesce(func.sum(DeathReport.count), 0))
+            .where(
+                and_(
+                    DeathReport.kandang_id == kandang_id,
+                    DeathReport.timestamp > since,
+                )
+            )
+        )
+        return int(result.scalar() or 0)
+
     async def get_list(
         self,
         kandang_id: uuid.UUID,
