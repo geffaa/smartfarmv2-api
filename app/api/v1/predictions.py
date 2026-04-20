@@ -360,15 +360,21 @@ async def reload_models(
 )
 async def get_prediction_history(
     type: Optional[str] = None,
-    limit: int = 50,
+    limit: int = 1000,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
     _: User = Depends(get_current_user),
     kandang: Kandang = Depends(get_single_kandang),
     db: AsyncSession = Depends(get_db),
 ):
     import json
+    import datetime as dt
+
+    start = start_date.date() if start_date else None
+    end = end_date.date() if end_date else None
 
     svc = PredictionService(db)
-    records = await svc.get_history(kandang.id, limit=limit, prediction_type=type)
+    records = await svc.get_history(kandang.id, limit=limit, prediction_type=type, start_date=start, end_date=end)
 
     data = []
     for r in records:

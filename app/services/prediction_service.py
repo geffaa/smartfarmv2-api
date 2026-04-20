@@ -3,6 +3,7 @@ Prediction Service - Simpan dan ambil hasil prediksi ML
 """
 import uuid
 import json
+import datetime
 from typing import Optional, List
 
 from sqlalchemy import select, desc
@@ -60,12 +61,18 @@ class PredictionService:
     async def get_history(
         self,
         kandang_id: uuid.UUID,
-        limit: int = 50,
+        limit: int = 1000,
         prediction_type: Optional[str] = None,
+        start_date: Optional[datetime.date] = None,
+        end_date: Optional[datetime.date] = None,
     ) -> List[Prediction]:
         query = select(Prediction).where(Prediction.kandang_id == kandang_id)
         if prediction_type:
             query = query.where(Prediction.type == prediction_type)
+        if start_date:
+            query = query.where(Prediction.created_at >= datetime.datetime.combine(start_date, datetime.time.min))
+        if end_date:
+            query = query.where(Prediction.created_at < datetime.datetime.combine(end_date + datetime.timedelta(days=1), datetime.time.min))
         query = query.order_by(desc(Prediction.created_at)).limit(limit)
         result = await self.db.execute(query)
         return list(result.scalars().all())

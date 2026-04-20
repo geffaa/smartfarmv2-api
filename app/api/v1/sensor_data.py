@@ -50,6 +50,11 @@ async def create_sensor_data_iot(
     death_service = DeathReportService(db)
     today_deaths = await death_service.get_total_today(kandang.id)
 
+    from app.services.daily_log_service import DailyLogService
+    daily_log_service = DailyLogService(db)
+    today_log = await daily_log_service.get_today(kandang.id)
+    today_populasi = today_log.populasi if today_log else None
+
     sensor_create = SensorDataCreate(
         timestamp=datetime.now(),
         hari_ke=hari_ke,
@@ -57,6 +62,7 @@ async def create_sensor_data_iot(
         kelembaban=data.humidity,
         amoniak=data.ammonia,
         death=today_deaths,
+        populasi=today_populasi,
     )
     sensor_data = await sensor_service.create(sensor_create, kandang_id=kandang.id)
 
@@ -124,7 +130,7 @@ async def create_sensor_data_iot(
         last_fc_time = last_fc_result.scalar_one_or_none()
         forecast_cooldown_ok = (
             last_fc_time is None or
-            (datetime.utcnow() - last_fc_time.replace(tzinfo=None)) >= timedelta(minutes=120)
+            (datetime.utcnow() - last_fc_time.replace(tzinfo=None)) >= timedelta(minutes=30)
         )
 
         recent_data = await sensor_service.get_latest_at_interval(kandang_id=kandang.id, n_points=4, interval_minutes=30)
