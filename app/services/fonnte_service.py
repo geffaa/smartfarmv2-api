@@ -93,7 +93,6 @@ async def send_whatsapp(phone: str, message: str) -> bool:
 
 def build_abnormal_message(
     kandang_name: str,
-    confidence: float,
     sensor_data: dict,
 ) -> str:
     """Buat teks pesan WhatsApp untuk alert kondisi Abnormal."""
@@ -109,12 +108,11 @@ def build_abnormal_message(
         f"🚨 *Broilabs - Kondisi Abnormal*\n\n"
         f"Kandang: *{kandang_name}*\n"
         f"Waktu: {now}\n\n"
-        f"Model Machine Learning mendeteksi kondisi *ABNORMAL*\n"
-        f"Confidence: *{confidence:.1%}*\n\n"
-        f"Detail sensor:\n"
+        f"Sistem mendeteksi kondisi kandang *tidak normal*.\n\n"
+        f"Data sensor saat ini:\n"
         f"• Suhu: {suhu}°C\n"
         f"• Kelembaban: {kelembaban}%\n"
-        f"• NH₃ (Amoniak): {amoniak} ppm\n\n"
+        f"• Amoniak: {amoniak} ppm\n\n"
         f"Segera periksa kondisi kandang!\n"
         f"🔗 https://broilabs.ukirbin.com/notifications"
     )
@@ -123,7 +121,6 @@ def build_abnormal_message(
 def build_death_forecast_message(
     kandang_name: str,
     predicted_death: int,
-    raw_prediction: float,
 ) -> str:
     """Buat teks pesan WhatsApp untuk alert prediksi kematian."""
     now = datetime.now().strftime("%d %b %Y %H:%M")
@@ -132,9 +129,8 @@ def build_death_forecast_message(
         f"⚠️ *Broilabs - Prediksi Kematian*\n\n"
         f"Kandang: *{kandang_name}*\n"
         f"Waktu: {now}\n\n"
-        f"Model Forecasting Machine Learning memprediksi\n"
-        f"*{predicted_death} kematian* pada interval berikutnya.\n"
-        f"(raw score: {raw_prediction:.4f})\n\n"
+        f"Sistem memprediksi *{predicted_death} ekor ayam* berisiko mati\n"
+        f"dalam 30 menit ke depan.\n\n"
         f"Segera periksa kondisi ayam!\n"
         f"🔗 https://broilabs.ukirbin.com/notifications"
     )

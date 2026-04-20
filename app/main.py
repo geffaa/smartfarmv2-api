@@ -27,10 +27,19 @@ async def lifespan(app: FastAPI):
         load_models()
     except Exception as e:
         print(f"⚠️  ML models not loaded: {e}")
-    
+
+    # Start scheduler
+    try:
+        from app.services.scheduler_service import start_scheduler
+        start_scheduler()
+    except Exception as e:
+        print(f"⚠️  Scheduler not started: {e}")
+
     yield
-    
+
     # Shutdown
+    from app.services.scheduler_service import stop_scheduler
+    stop_scheduler()
     print("👋 Shutting down SmartFarm API...")
 
 

@@ -5,7 +5,7 @@ and optional WhatsApp via Fonnte (fonnte.com).
 import uuid
 import json
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict
 
 from sqlalchemy import select, func, and_, desc, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -224,7 +224,6 @@ class NotificationService:
         user_id: uuid.UUID,
         kandang_id: uuid.UUID,
         prediction: str,
-        confidence: float,
         sensor_data: dict,
     ):
         """Create in-app notification + kirim WhatsApp untuk kondisi Abnormal."""
@@ -237,10 +236,11 @@ class NotificationService:
             type=NotificationType.ABNORMAL_CLASSIFICATION.value,
             title="⚠️ Kondisi Abnormal Terdeteksi",
             message=(
-                f"Klasifikasi menunjukkan kondisi ABNORMAL dengan confidence {confidence:.1%}. "
+                f"Sistem mendeteksi kondisi kandang tidak normal. "
                 f"Suhu: {sensor_data.get('Suhu', 'N/A')}°C, "
                 f"Kelembaban: {sensor_data.get('Kelembaban', 'N/A')}%, "
-                f"Amoniak: {sensor_data.get('Amoniak', 'N/A')} ppm"
+                f"Amoniak: {sensor_data.get('Amoniak', 'N/A')} ppm. "
+                f"Segera periksa kondisi kandang!"
             ),
             data=json.dumps(sensor_data),
         )
@@ -251,7 +251,7 @@ class NotificationService:
             phone = await self._get_user_phone(user_id)
             if phone:
                 kandang_name = await self._get_kandang_name(kandang_id)
-                wa_message = build_abnormal_message(kandang_name, confidence, sensor_data)
+                wa_message = build_abnormal_message(kandang_name, sensor_data)
                 await send_whatsapp(phone, wa_message)
         except Exception as e:
             import logging
@@ -276,9 +276,8 @@ class NotificationService:
             type=NotificationType.DEATH_FORECAST.value,
             title=f"🚨 Prediksi {predicted_death} Kematian",
             message=(
-                f"Model forecasting memprediksi {predicted_death} kematian "
-                f"(raw: {raw_prediction:.2f}) pada interval berikutnya. "
-                f"Segera periksa kondisi kandang!"
+                f"Sistem memprediksi {predicted_death} ekor ayam berisiko mati "
+                f"dalam 30 menit ke depan. Segera periksa kondisi kandang!"
             ),
             data=json.dumps({
                 "predicted_death": predicted_death,
@@ -292,7 +291,7 @@ class NotificationService:
             phone = await self._get_user_phone(user_id)
             if phone:
                 kandang_name = await self._get_kandang_name(kandang_id)
-                wa_message = build_death_forecast_message(kandang_name, predicted_death, raw_prediction)
+                wa_message = build_death_forecast_message(kandang_name, predicted_death)
                 await send_whatsapp(phone, wa_message)
         except Exception as e:
             import logging

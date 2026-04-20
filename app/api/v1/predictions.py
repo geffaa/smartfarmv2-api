@@ -174,7 +174,6 @@ async def classify_condition(
                 user_id=current_user.id,
                 kandang_id=kandang.id,
                 prediction=prediction_result.prediction,
-                confidence=prediction_result.confidence,
                 sensor_data=features,
             )
         

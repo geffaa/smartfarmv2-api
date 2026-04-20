@@ -61,7 +61,13 @@ async def create_sensor_data_iot(
     from app.services.daily_log_service import DailyLogService
     daily_log_service = DailyLogService(db)
     today_log = await daily_log_service.get_today(kandang.id)
-    today_populasi = today_log.populasi if today_log else None
+    if today_log and today_log.populasi is not None:
+        today_populasi = today_log.populasi - today_deaths
+    elif last_readings and last_readings[-1].populasi is not None:
+        # No daily log today — carry forward last reading's populasi minus this interval's deaths
+        today_populasi = last_readings[-1].populasi - death_delta
+    else:
+        today_populasi = None
 
     sensor_create = SensorDataCreate(
         timestamp=datetime.now(),
@@ -71,6 +77,8 @@ async def create_sensor_data_iot(
         amoniak=data.ammonia,
         death=death_delta,
         populasi=today_populasi,
+        pakan=today_log.pakan if today_log else None,
+        minum=today_log.minum if today_log else None,
     )
     sensor_data = await sensor_service.create(sensor_create, kandang_id=kandang.id)
 
@@ -116,7 +124,6 @@ async def create_sensor_data_iot(
                     user_id=kandang.pemilik_id,
                     kandang_id=kandang.id,
                     prediction=cls_result['class'],
-                    confidence=cls_result['confidence'],
                     sensor_data=features,
                 )
             except Exception as notif_err:
@@ -257,7 +264,6 @@ async def create_sensor_data(
                     user_id=current_user.id,
                     kandang_id=kandang.id,
                     prediction=cls_result['class'],
-                    confidence=cls_result['confidence'],
                     sensor_data=features,
                 )
             except Exception as notif_err:

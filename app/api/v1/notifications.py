@@ -162,7 +162,6 @@ async def test_trigger(
         user_id=current_user.id,
         kandang_id=kandang.id,
         prediction="Abnormal",
-        confidence=0.923,
         sensor_data={
             "Suhu": 34.5,
             "Kelembaban": 82.1,
