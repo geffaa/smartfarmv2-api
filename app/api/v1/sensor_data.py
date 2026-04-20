@@ -354,7 +354,7 @@ async def update_manual_fields(
 )
 async def get_sensor_data(
     page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=50, ge=1, le=100),
+    page_size: int = Query(default=50, ge=1, le=1000),
     start_time: Optional[datetime] = Query(default=None),
     end_time: Optional[datetime] = Query(default=None),
     current_user: User = Depends(get_current_user),
