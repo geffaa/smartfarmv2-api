@@ -219,6 +219,33 @@ class NotificationService:
         kandang = result.scalar_one_or_none()
         return kandang.nama if kandang else "Kandang"
 
+    async def _get_kandang_users(self, kandang_id: uuid.UUID) -> List[User]:
+        """
+        Ambil semua user yang harus dinotifikasi untuk sebuah kandang:
+        pemilik kandang + semua peternak aktif di bawah pemilik tersebut.
+        """
+        from app.models.kandang import Kandang
+        from app.models.user import UserRole
+
+        kandang_result = await self.db.execute(
+            select(Kandang).where(Kandang.id == kandang_id)
+        )
+        kandang = kandang_result.scalar_one_or_none()
+        if not kandang:
+            return []
+
+        users_result = await self.db.execute(
+            select(User).where(
+                (User.id == kandang.pemilik_id) |
+                (
+                    (User.pemilik_id == kandang.pemilik_id) &
+                    (User.role == UserRole.PETERNAK) &
+                    (User.is_active == True)
+                )
+            )
+        )
+        return list(users_result.scalars().all())
+
     async def create_classification_alert(
         self,
         user_id: uuid.UUID,
@@ -226,38 +253,53 @@ class NotificationService:
         prediction: str,
         sensor_data: dict,
     ):
-        """Create in-app notification + kirim WhatsApp untuk kondisi Abnormal."""
+        """Create in-app notification + kirim WhatsApp ke pemilik & peternak untuk kondisi Abnormal."""
         if prediction != "Abnormal":
             return None
 
-        data = NotificationCreate(
-            user_id=user_id,
-            kandang_id=kandang_id,
-            type=NotificationType.ABNORMAL_CLASSIFICATION.value,
-            title="⚠️ Kondisi Abnormal Terdeteksi",
-            message=(
-                f"Sistem mendeteksi kondisi kandang tidak normal. "
-                f"Suhu: {sensor_data.get('Suhu', 'N/A')}°C, "
-                f"Kelembaban: {sensor_data.get('Kelembaban', 'N/A')}%, "
-                f"Amoniak: {sensor_data.get('Amoniak', 'N/A')} ppm. "
-                f"Segera periksa kondisi kandang!"
-            ),
-            data=json.dumps(sensor_data),
+        title = "⚠️ Kondisi Abnormal Terdeteksi"
+        message = (
+            f"Sistem mendeteksi kondisi kandang tidak normal. "
+            f"Suhu: {sensor_data.get('Suhu', 'N/A')}°C, "
+            f"Kelembaban: {sensor_data.get('Kelembaban', 'N/A')}%, "
+            f"Amoniak: {sensor_data.get('Amoniak', 'N/A')} ppm. "
+            f"Segera periksa kondisi kandang!"
         )
-        notification = await self.create(data)
 
-        # WhatsApp via Fonnte (non-blocking — error tidak membatalkan flow)
+        target_users = await self._get_kandang_users(kandang_id)
+        if not target_users:
+            # Fallback ke user_id jika kandang tidak ditemukan
+            target_users_ids = [user_id]
+        else:
+            target_users_ids = [u.id for u in target_users]
+
+        first_notification = None
+        kandang_name = await self._get_kandang_name(kandang_id)
+        wa_message = build_abnormal_message(kandang_name, sensor_data)
+
+        for uid in target_users_ids:
+            notif_data = NotificationCreate(
+                user_id=uid,
+                kandang_id=kandang_id,
+                type=NotificationType.ABNORMAL_CLASSIFICATION.value,
+                title=title,
+                message=message,
+                data=json.dumps(sensor_data),
+            )
+            notif = await self.create(notif_data)
+            if first_notification is None:
+                first_notification = notif
+
+        # WhatsApp ke semua user yang punya nomor HP
         try:
-            phone = await self._get_user_phone(user_id)
-            if phone:
-                kandang_name = await self._get_kandang_name(kandang_id)
-                wa_message = build_abnormal_message(kandang_name, sensor_data)
-                await send_whatsapp(phone, wa_message)
+            for user in target_users:
+                if user.phone:
+                    await send_whatsapp(user.phone, wa_message)
         except Exception as e:
             import logging
             logging.getLogger(__name__).warning(f"Fonnte classification alert failed: {e}")
 
-        return notification
+        return first_notification
 
     async def create_death_forecast_alert(
         self,
@@ -266,35 +308,49 @@ class NotificationService:
         predicted_death: int,
         raw_prediction: float,
     ):
-        """Create in-app notification + kirim WhatsApp untuk prediksi kematian > 1."""
+        """Create in-app notification + kirim WhatsApp ke pemilik & peternak untuk prediksi kematian > 1."""
         if predicted_death <= 1:
             return None
 
-        data = NotificationCreate(
-            user_id=user_id,
-            kandang_id=kandang_id,
-            type=NotificationType.DEATH_FORECAST.value,
-            title=f"🚨 Prediksi {predicted_death} Kematian",
-            message=(
-                f"Sistem memprediksi {predicted_death} ekor ayam berisiko mati "
-                f"dalam 30 menit ke depan. Segera periksa kondisi kandang!"
-            ),
-            data=json.dumps({
-                "predicted_death": predicted_death,
-                "raw_prediction": raw_prediction,
-            }),
+        title = f"🚨 Prediksi {predicted_death} Kematian"
+        message = (
+            f"Sistem memprediksi {predicted_death} ekor ayam berisiko mati "
+            f"dalam 30 menit ke depan. Segera periksa kondisi kandang!"
         )
-        notification = await self.create(data)
 
-        # WhatsApp via Fonnte
+        target_users = await self._get_kandang_users(kandang_id)
+        if not target_users:
+            target_users_ids = [user_id]
+        else:
+            target_users_ids = [u.id for u in target_users]
+
+        first_notification = None
+        kandang_name = await self._get_kandang_name(kandang_id)
+        wa_message = build_death_forecast_message(kandang_name, predicted_death)
+
+        for uid in target_users_ids:
+            notif_data = NotificationCreate(
+                user_id=uid,
+                kandang_id=kandang_id,
+                type=NotificationType.DEATH_FORECAST.value,
+                title=title,
+                message=message,
+                data=json.dumps({
+                    "predicted_death": predicted_death,
+                    "raw_prediction": raw_prediction,
+                }),
+            )
+            notif = await self.create(notif_data)
+            if first_notification is None:
+                first_notification = notif
+
+        # WhatsApp ke semua user yang punya nomor HP
         try:
-            phone = await self._get_user_phone(user_id)
-            if phone:
-                kandang_name = await self._get_kandang_name(kandang_id)
-                wa_message = build_death_forecast_message(kandang_name, predicted_death)
-                await send_whatsapp(phone, wa_message)
+            for user in target_users:
+                if user.phone:
+                    await send_whatsapp(user.phone, wa_message)
         except Exception as e:
             import logging
             logging.getLogger(__name__).warning(f"Fonnte forecast alert failed: {e}")
 
-        return notification
+        return first_notification

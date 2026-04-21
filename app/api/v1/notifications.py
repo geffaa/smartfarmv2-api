@@ -184,6 +184,29 @@ async def test_trigger(
     )
 
 
+@router.post(
+    "/test-reminder",
+    summary="Test Daily Log Reminder",
+    description="Trigger daily log reminder sekarang (admin only, untuk debugging)",
+)
+async def test_daily_log_reminder(
+    current_user: User = Depends(get_current_user),
+):
+    """Trigger send_daily_log_reminder() secara manual untuk testing."""
+    from app.models.user import UserRole
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Hanya admin yang dapat mengakses endpoint ini",
+        )
+    from app.services.scheduler_service import send_daily_log_reminder
+    await send_daily_log_reminder()
+    return success_response(
+        data={},
+        message="Daily log reminder berhasil di-trigger. Cek notifikasi & WhatsApp.",
+    )
+
+
 # WebSocket endpoint for real-time notifications
 @router.websocket("/ws")
 async def websocket_endpoint(
