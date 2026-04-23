@@ -1,5 +1,14 @@
 """
 Scheduler Service - Penjadwalan tugas otomatis (APScheduler)
+
+Jobs:
+  1. send_daily_log_reminder — 07:00 WIB setiap hari
+     Peternak : pengingat personal sederhana
+     Pemilik  : informasi bahwa peternak kandangnya diingatkan
+     Admin    : ringkasan per kandang (pemilik + jumlah peternak)
+
+  2. check_iot_offline — setiap 30 menit
+     Admin saja: in-app + WA dengan detail pemilik & waktu terakhir data masuk
 """
 import logging
 from datetime import datetime
@@ -11,12 +20,15 @@ logger = logging.getLogger(__name__)
 
 scheduler = AsyncIOScheduler(timezone="Asia/Jakarta")
 
+APP_URL_NOTIF   = "https://broilabs.ukirbin.com/notifications"
+APP_URL_LOG     = "https://broilabs.ukirbin.com/daily-logs"
+
 
 async def send_daily_log_reminder():
     """
-    Kirim notifikasi pengingat input log harian setiap pagi jam 07:00 WIB.
-    Dikirim ke pemilik + semua peternak aktif di bawahnya, via in-app + WhatsApp.
-    Deduplication: skip jika notifikasi hari ini sudah pernah dikirim ke user tsb.
+    Kirim notifikasi pengingat log harian pukul 07:00 WIB.
+    Setiap role menerima isi notifikasi yang berbeda.
+    Deduplication: skip jika sudah pernah dikirim hari ini untuk user+kandang tsb.
     """
     from app.database import async_session_maker as AsyncSessionLocal
     from app.models.kandang import Kandang
@@ -27,85 +39,149 @@ async def send_daily_log_reminder():
     from app.schemas.notification import NotificationCreate
     from sqlalchemy import select, func
 
-    now = datetime.now()
-    today_str = now.strftime("%d %b %Y")
+    now      = datetime.now()
+    today_str   = now.strftime("%d %b %Y")
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
     async with AsyncSessionLocal() as db:
         try:
-            result = await db.execute(
+            kandangs_result = await db.execute(
                 select(Kandang).where(Kandang.is_active == True)
             )
-            kandangs = result.scalars().all()
+            kandangs = kandangs_result.scalars().all()
+
+            # Ambil semua admin sekali
+            admins_result = await db.execute(
+                select(User).where(
+                    (User.role == UserRole.ADMIN) & (User.is_active == True)
+                )
+            )
+            admins = admins_result.scalars().all()
 
             for kandang in kandangs:
                 try:
                     svc = NotificationService(db)
 
-                    title = "📋 Pengingat Log Harian"
-                    message = (
-                        f"Selamat pagi! Jangan lupa mengisi log harian kandang "
-                        f"*{kandang.nama}* hari ini ({today_str}). "
-                        f"Catat pakan, minum, bobot, dan populasi ayam."
-                    )
-                    wa_msg = (
-                        f"📋 *Pengingat Log Harian - Broilabs*\n\n"
-                        f"Selamat pagi! 🌅\n"
-                        f"Jangan lupa mengisi log harian kandang *{kandang.nama}* hari ini.\n\n"
-                        f"Catat:\n"
-                        f"• Jumlah pakan (kg)\n"
-                        f"• Jumlah minum (liter)\n"
-                        f"• Bobot rata-rata (gram)\n"
-                        f"• Populasi saat ini\n\n"
-                        f"🔗 https://broilabs.ukirbin.com/daily-logs"
-                    )
-
-                    # Pemilik + semua peternak aktif di bawah pemilik kandang
+                    # ── Ambil pemilik & peternak kandang ──────────────────────
                     users_result = await db.execute(
                         select(User).where(
-                            (User.id == kandang.pemilik_id) |
-                            (
-                                (User.pemilik_id == kandang.pemilik_id) &
-                                (User.role == UserRole.PETERNAK) &
-                                (User.is_active == True)
+                            (User.id == kandang.pemilik_id)
+                            | (
+                                (User.pemilik_id == kandang.pemilik_id)
+                                & (User.role == UserRole.PETERNAK)
+                                & (User.is_active == True)
                             )
                         )
                     )
                     target_users = users_result.scalars().all()
 
-                    sent_count = 0
+                    pemilik_user  = next((u for u in target_users if u.role == UserRole.PEMILIK), None)
+                    peternak_list = [u for u in target_users if u.role == UserRole.PETERNAK]
+                    pemilik_name  = pemilik_user.full_name if pemilik_user else "Pemilik"
+                    peternak_count = len(peternak_list)
+
+                    # ── Pemilik + Peternak ────────────────────────────────────
                     for user in target_users:
-                        # Deduplication: skip jika sudah ada notif hari ini untuk user+kandang ini
                         already_sent = await db.execute(
                             select(func.count()).where(
-                                (Notification.user_id == user.id) &
-                                (Notification.kandang_id == kandang.id) &
-                                (Notification.type == NotificationType.SYSTEM.value) &
-                                (Notification.title == title) &
-                                (Notification.created_at >= today_start)
+                                (Notification.user_id == user.id)
+                                & (Notification.kandang_id == kandang.id)
+                                & (Notification.type == NotificationType.SYSTEM.value)
+                                & (Notification.title == "📋 Pengingat Log Harian")
+                                & (Notification.created_at >= today_start)
                             )
                         )
                         if already_sent.scalar() > 0:
                             continue
 
-                        notif_data = NotificationCreate(
-                            user_id=user.id,
-                            kandang_id=kandang.id,
-                            type=NotificationType.SYSTEM.value,
-                            title=title,
-                            message=message,
-                        )
-                        await svc.create(notif_data, broadcast=True)
+                        if user.role == UserRole.PEMILIK:
+                            inapp_msg = (
+                                f"Selamat pagi! Pengingat log harian kandang *{kandang.nama}* "
+                                f"hari ini ({today_str}) telah dikirim ke {peternak_count} peternak Anda."
+                            )
+                            wa_msg = (
+                                f"📋 *Pengingat Log Harian - Broilabs*\n\n"
+                                f"Selamat pagi! 🌅\n"
+                                f"Pengingat log harian kandang *{kandang.nama}* hari ini "
+                                f"telah dikirim ke *{peternak_count} peternak* Anda.\n\n"
+                                f"Pastikan log harian hari ini terisi dengan lengkap.\n"
+                                f"🔗 {APP_URL_LOG}"
+                            )
+                        else:  # peternak
+                            inapp_msg = (
+                                f"Selamat pagi! Jangan lupa mengisi log harian kandang "
+                                f"*{kandang.nama}* hari ini ({today_str}). "
+                                f"Catat pakan, minum, bobot, dan populasi ayam."
+                            )
+                            wa_msg = (
+                                f"📋 *Pengingat Log Harian - Broilabs*\n\n"
+                                f"Selamat pagi! 🌅\n"
+                                f"Jangan lupa mengisi log harian kandang *{kandang.nama}* hari ini.\n\n"
+                                f"Catat:\n"
+                                f"• Jumlah pakan (kg)\n"
+                                f"• Jumlah minum (liter)\n"
+                                f"• Bobot rata-rata (gram)\n"
+                                f"• Populasi saat ini\n\n"
+                                f"🔗 {APP_URL_LOG}"
+                            )
 
+                        await svc.create(
+                            NotificationCreate(
+                                user_id=user.id,
+                                kandang_id=kandang.id,
+                                type=NotificationType.SYSTEM.value,
+                                title="📋 Pengingat Log Harian",
+                                message=inapp_msg,
+                            ),
+                            broadcast=True,
+                        )
                         if user.phone:
                             await send_whatsapp(user.phone, wa_msg)
 
-                        sent_count += 1
+                    # ── Admin — ringkasan per kandang ─────────────────────────
+                    admin_title   = "📋 Pengingat Log Harian"
+                    admin_inapp   = (
+                        f"Pengingat log harian telah dikirim: kandang *{kandang.nama}* "
+                        f"(Pemilik: {pemilik_name}) — {peternak_count} peternak diingatkan."
+                    )
+                    admin_wa = (
+                        f"📋 *Pengingat Log Harian - Broilabs*\n\n"
+                        f"Kandang: *{kandang.nama}*\nPemilik: {pemilik_name}\n"
+                        f"Peternak yang diingatkan: *{peternak_count} orang*\n\n"
+                        f"🔗 {APP_URL_LOG}"
+                    )
+
+                    for admin in admins:
+                        already_sent = await db.execute(
+                            select(func.count()).where(
+                                (Notification.user_id == admin.id)
+                                & (Notification.kandang_id == kandang.id)
+                                & (Notification.type == NotificationType.SYSTEM.value)
+                                & (Notification.title == admin_title)
+                                & (Notification.created_at >= today_start)
+                            )
+                        )
+                        if already_sent.scalar() > 0:
+                            continue
+
+                        await svc.create(
+                            NotificationCreate(
+                                user_id=admin.id,
+                                kandang_id=kandang.id,
+                                type=NotificationType.SYSTEM.value,
+                                title=admin_title,
+                                message=admin_inapp,
+                            ),
+                            broadcast=True,
+                        )
+                        if admin.phone:
+                            await send_whatsapp(admin.phone, admin_wa)
 
                     logger.info(
-                        f"Daily log reminder: kandang '{kandang.nama}' → "
-                        f"{sent_count} sent, {len(target_users) - sent_count} skipped (already sent today)"
+                        f"Daily log reminder: kandang '{kandang.nama}' — "
+                        f"{peternak_count} peternak + pemilik notified, admins informed"
                     )
+
                 except Exception as e:
                     logger.warning(f"Failed to send reminder for kandang {kandang.id}: {e}")
 
@@ -115,9 +191,9 @@ async def send_daily_log_reminder():
 
 async def check_iot_offline():
     """
-    Cek setiap 30 menit apakah ada kandang aktif yang tidak mengirim data IoT
-    lebih dari 35 menit. Jika ya, kirim notifikasi ke semua admin.
-    Deduplication: skip jika notif offline sudah dikirim dalam 1 jam terakhir.
+    Cek setiap 30 menit apakah kandang aktif tidak mengirim data > 35 menit.
+    Kirim notifikasi in-app + WA ke semua admin dengan detail pemilik kandang.
+    Deduplication: cooldown 1 jam per kandang.
     """
     from app.database import async_session_maker as AsyncSessionLocal
     from app.models.kandang import Kandang
@@ -125,11 +201,12 @@ async def check_iot_offline():
     from app.models.notification import Notification, NotificationType
     from app.models.sensor_data import SensorData
     from app.services.notification_service import NotificationService
+    from app.services.fonnte_service import send_whatsapp
     from app.schemas.notification import NotificationCreate
     from sqlalchemy import select, func
     from datetime import timedelta
 
-    now = datetime.utcnow()
+    now               = datetime.utcnow()
     offline_threshold = now - timedelta(minutes=35)
     cooldown_threshold = now - timedelta(hours=1)
 
@@ -142,8 +219,7 @@ async def check_iot_offline():
 
             admins_result = await db.execute(
                 select(User).where(
-                    (User.role == UserRole.ADMIN) &
-                    (User.is_active == True)
+                    (User.role == UserRole.ADMIN) & (User.is_active == True)
                 )
             )
             admins = admins_result.scalars().all()
@@ -152,7 +228,6 @@ async def check_iot_offline():
 
             for kandang in kandangs:
                 try:
-                    # Cek data sensor terakhir
                     last_data_result = await db.execute(
                         select(SensorData.timestamp)
                         .where(SensorData.kandang_id == kandang.id)
@@ -161,45 +236,76 @@ async def check_iot_offline():
                     )
                     last_ts = last_data_result.scalar_one_or_none()
 
-                    # Kandang baru tanpa data sama sekali, atau data terakhir > 35 menit lalu
-                    is_offline = (last_ts is None) or (last_ts.replace(tzinfo=None) < offline_threshold)
+                    is_offline = (last_ts is None) or (
+                        last_ts.replace(tzinfo=None) < offline_threshold
+                    )
                     if not is_offline:
                         continue
 
-                    last_seen = "Belum pernah ada data" if last_ts is None else \
-                        f"{int((now - last_ts.replace(tzinfo=None)).total_seconds() // 60)} menit lalu"
+                    # Hitung waktu terakhir data masuk
+                    if last_ts is None:
+                        last_seen_inapp = "Belum pernah ada data"
+                        last_seen_wa    = "belum pernah ada data"
+                    else:
+                        minutes_ago = int(
+                            (now - last_ts.replace(tzinfo=None)).total_seconds() // 60
+                        )
+                        last_seen_inapp = f"{minutes_ago} menit lalu"
+                        last_seen_wa    = f"{minutes_ago} menit yang lalu"
 
-                    title = f"⚠️ IoT Offline: {kandang.nama}"
-                    message = (
-                        f"Kandang *{kandang.nama}* tidak mengirim data sensor. "
-                        f"Data terakhir: {last_seen}. Cek koneksi perangkat IoT."
+                    # Ambil nama pemilik
+                    pemilik_result = await db.execute(
+                        select(User).where(User.id == kandang.pemilik_id)
+                    )
+                    pemilik = pemilik_result.scalar_one_or_none()
+                    pemilik_name = pemilik.full_name if pemilik else "—"
+
+                    notif_title = f"⚠️ IoT Offline: {kandang.nama}"
+                    inapp_msg   = (
+                        f"Kandang *{kandang.nama}* (Pemilik: {pemilik_name}) tidak mengirim "
+                        f"data sensor. Data terakhir: {last_seen_inapp}. "
+                        f"Cek koneksi perangkat IoT."
+                    )
+                    wa_msg = (
+                        f"⚠️ *Broilabs - IoT Offline*\n\n"
+                        f"Kandang: *{kandang.nama}*\nPemilik: {pemilik_name}\n\n"
+                        f"Perangkat IoT tidak mengirim data sejak {last_seen_wa}.\n"
+                        f"Segera periksa koneksi perangkat!\n\n"
+                        f"🔗 {APP_URL_NOTIF}"
                     )
 
                     svc = NotificationService(db)
                     for admin in admins:
-                        # Cooldown: skip jika sudah kirim notif offline untuk kandang ini dalam 1 jam
                         already_sent = await db.execute(
                             select(func.count()).where(
-                                (Notification.user_id == admin.id) &
-                                (Notification.kandang_id == kandang.id) &
-                                (Notification.type == NotificationType.SYSTEM.value) &
-                                (Notification.title == title) &
-                                (Notification.created_at >= cooldown_threshold)
+                                (Notification.user_id == admin.id)
+                                & (Notification.kandang_id == kandang.id)
+                                & (Notification.type == NotificationType.SYSTEM.value)
+                                & (Notification.title == notif_title)
+                                & (Notification.created_at >= cooldown_threshold)
                             )
                         )
                         if already_sent.scalar() > 0:
                             continue
 
-                        notif_data = NotificationCreate(
-                            user_id=admin.id,
-                            kandang_id=kandang.id,
-                            type=NotificationType.SYSTEM.value,
-                            title=title,
-                            message=message,
+                        await svc.create(
+                            NotificationCreate(
+                                user_id=admin.id,
+                                kandang_id=kandang.id,
+                                type=NotificationType.SYSTEM.value,
+                                title=notif_title,
+                                message=inapp_msg,
+                            ),
+                            broadcast=True,
                         )
-                        await svc.create(notif_data, broadcast=True)
+                        if admin.phone:
+                            await send_whatsapp(admin.phone, wa_msg)
 
-                    logger.info(f"IoT offline alert sent for kandang '{kandang.nama}' to {len(admins)} admin(s)")
+                    logger.info(
+                        f"IoT offline alert: kandang '{kandang.nama}' ({pemilik_name}) "
+                        f"→ {len(admins)} admin(s) notified"
+                    )
+
                 except Exception as e:
                     logger.warning(f"IoT offline check failed for kandang {kandang.id}: {e}")
 
@@ -208,7 +314,6 @@ async def check_iot_offline():
 
 
 def start_scheduler():
-    """Daftarkan jobs dan jalankan scheduler."""
     scheduler.add_job(
         send_daily_log_reminder,
         trigger=CronTrigger(hour=7, minute=0, timezone="Asia/Jakarta"),

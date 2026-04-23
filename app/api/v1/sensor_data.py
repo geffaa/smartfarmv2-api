@@ -18,7 +18,8 @@ from app.schemas.sensor_data import (
     SensorDataStats,
 )
 from app.services.sensor_data_service import SensorDataService
-from app.api.deps import get_current_user, get_iot_auth, get_single_kandang
+from app.api.deps import get_current_user, get_iot_auth, get_single_kandang, require_roles
+from app.models.user import UserRole
 
 router = APIRouter()
 
@@ -90,10 +91,10 @@ async def create_sensor_data_iot(
             'Suhu': data.temperature,
             'Kelembaban': data.humidity,
             'Amoniak': data.ammonia,
-            'Pakan': 0,
-            'Minum': 0,
-            'Bobot': 0,
-            'Populasi': 0,
+            'Pakan': today_log.pakan if today_log and today_log.pakan is not None else 0,
+            'Minum': today_log.minum if today_log and today_log.minum is not None else 0,
+            'Bobot': today_log.bobot if today_log and today_log.bobot is not None else 0,
+            'Populasi': today_populasi if today_populasi is not None else 0,
             'Death': today_deaths,
             'Luas Kandang': kandang.kapasitas / 10 if kandang.kapasitas else 120,
             'Hour': sensor_data.timestamp.hour,
@@ -214,13 +215,13 @@ async def create_sensor_data_iot(
     "",
     response_model=BaseResponse[SensorDataResponse],
     status_code=status.HTTP_201_CREATED,
-    summary="Create Sensor Data",
-    description="Record new sensor data reading (manual input). Auto-triggers ML predictions.",
+    summary="Create Sensor Data (Manual - Admin Only)",
+    description="Manual sensor data input by Admin as fallback when IoT device is offline. Auto-triggers ML predictions.",
 )
 async def create_sensor_data(
     data: SensorDataCreate,
     request: Request,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_roles(UserRole.ADMIN)),
     kandang: Kandang = Depends(get_single_kandang),
     db: AsyncSession = Depends(get_db),
 ):
@@ -426,26 +427,5 @@ async def get_sensor_stats(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tidak ada data sensor dalam periode yang diminta")
 
     return success_response(data=stats, message=f"Statistik {hours} jam terakhir")
-
-
-@router.delete(
-    "/{sensor_data_id}",
-    response_model=BaseResponse[dict],
-    summary="Delete Sensor Data",
-    description="Delete a sensor data record (Admin only)",
-)
-async def delete_sensor_data(
-    sensor_data_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    if current_user.role != "admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Hanya admin yang dapat menghapus data sensor")
-
-    sensor_service = SensorDataService(db)
-    deleted = await sensor_service.delete(sensor_data_id)
-
-    if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Data sensor tidak ditemukan")
 
     return success_response(data={"deleted_id": str(sensor_data_id)}, message="Data sensor berhasil dihapus")

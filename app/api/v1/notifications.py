@@ -5,7 +5,6 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query, WebSocket, WebSocketDisconnect
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from jose import jwt, JWTError
 
@@ -137,73 +136,6 @@ async def mark_all_as_read(
     return success_response(
         data={"marked_count": count},
         message=f"{count} notifikasi ditandai sudah dibaca",
-    )
-
-
-@router.post(
-    "/test-trigger",
-    summary="Test Trigger",
-    description="Trigger one abnormal classification + one death forecast for the current user (dev only)",
-)
-async def test_trigger(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    from app.models.kandang import Kandang
-    # Pick first available kandang
-    result = await db.execute(select(Kandang).limit(1))
-    kandang = result.scalar_one_or_none()
-    if not kandang:
-        raise HTTPException(status_code=404, detail="Tidak ada kandang ditemukan")
-
-    service = NotificationService(db)
-
-    n1 = await service.create_classification_alert(
-        user_id=current_user.id,
-        kandang_id=kandang.id,
-        prediction="Abnormal",
-        sensor_data={
-            "Suhu": 34.5,
-            "Kelembaban": 82.1,
-            "Amoniak": 0.047,
-            "Hari Ke-": 18,
-            "confidence": 0.923,
-        },
-    )
-
-    n2 = await service.create_death_forecast_alert(
-        user_id=current_user.id,
-        kandang_id=kandang.id,
-        predicted_death=5,
-        raw_prediction=4.87,
-    )
-
-    return success_response(
-        data={"abnormal_id": str(n1.id) if n1 else None, "forecast_id": str(n2.id) if n2 else None},
-        message="Test notifications triggered",
-    )
-
-
-@router.post(
-    "/test-reminder",
-    summary="Test Daily Log Reminder",
-    description="Trigger daily log reminder sekarang (admin only, untuk debugging)",
-)
-async def test_daily_log_reminder(
-    current_user: User = Depends(get_current_user),
-):
-    """Trigger send_daily_log_reminder() secara manual untuk testing."""
-    from app.models.user import UserRole
-    if current_user.role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Hanya admin yang dapat mengakses endpoint ini",
-        )
-    from app.services.scheduler_service import send_daily_log_reminder
-    await send_daily_log_reminder()
-    return success_response(
-        data={},
-        message="Daily log reminder berhasil di-trigger. Cek notifikasi & WhatsApp.",
     )
 
 

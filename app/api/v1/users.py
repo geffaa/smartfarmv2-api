@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.user import User, UserRole
-from app.schemas.user import UserCreate, UserUpdate, UserResponse, PeternakCreate
+from app.schemas.user import UserCreate, UserUpdate, UserResponse
 from app.schemas.base import (
     BaseResponse,
     PaginatedResponse,
@@ -17,7 +17,6 @@ from app.services.user_service import UserService
 from app.services.activity_log_service import ActivityLogService
 from app.api.deps import (
     get_current_user,
-    require_roles,
     require_admin,
     get_request_info,
 )
@@ -292,114 +291,4 @@ async def delete_user(
     )
     
     return success_response(message="User berhasil dihapus")
-
-
-@router.get(
-    "/pemilik/{pemilik_id}/peternaks",
-    response_model=BaseResponse[list[UserResponse]],
-    summary="Get Peternaks by Pemilik",
-    description="Get all peternaks belonging to a pemilik",
-)
-async def get_peternaks_by_pemilik(
-    pemilik_id: uuid.UUID,
-    is_active: Optional[bool] = Query(None, description="Filter by active status"),
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Get peternaks belonging to a pemilik."""
-    # Only admin can view any pemilik's peternaks
-    # Pemilik can only view their own peternaks
-    if current_user.role != UserRole.ADMIN:
-        if current_user.role != UserRole.PEMILIK or current_user.id != pemilik_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Akses ditolak",
-            )
-    
-    user_service = UserService(db)
-    
-    # Verify pemilik exists
-    pemilik = await user_service.get_by_id(pemilik_id)
-    if not pemilik or pemilik.role != UserRole.PEMILIK:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Pemilik tidak ditemukan",
-        )
-    
-    peternaks = await user_service.get_peternaks_by_pemilik(
-        pemilik_id=pemilik_id,
-        is_active=is_active,
-    )
-    
-    return success_response(
-        data=[UserResponse.model_validate(p) for p in peternaks],
-        message="Daftar peternak berhasil diambil",
-    )
-
-
-@router.post(
-    "/me/peternaks",
-    response_model=BaseResponse[UserResponse],
-    status_code=status.HTTP_201_CREATED,
-    summary="Create Peternak (Pemilik)",
-    description="Create new peternak under current pemilik's account",
-)
-async def create_peternak_by_pemilik(
-    request: Request,
-    peternak_data: PeternakCreate,
-    current_user: User = Depends(require_roles(UserRole.PEMILIK)),
-    db: AsyncSession = Depends(get_db),
-):
-    """Create new peternak. Only pemilik can use this endpoint."""
-    user_service = UserService(db)
-    
-    # Check if email already exists
-    existing_email = await user_service.get_by_email(peternak_data.email)
-    if existing_email:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email sudah terdaftar",
-        )
-    
-    # Check if username already exists
-    existing_username = await user_service.get_by_username(peternak_data.username)
-    if existing_username:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Username sudah terdaftar",
-        )
-    
-    # Create UserCreate with role=PETERNAK and pemilik_id=current_user.id
-    user_create_data = UserCreate(
-        email=peternak_data.email,
-        username=peternak_data.username,
-        full_name=peternak_data.full_name,
-        phone=peternak_data.phone,
-        password=peternak_data.password,
-        role=UserRole.PETERNAK,
-        pemilik_id=current_user.id,
-    )
-    
-    # Create user
-    user = await user_service.create(
-        user_data=user_create_data,
-        created_by_id=current_user.id,
-    )
-    
-    # Log activity
-    request_info = await get_request_info(request)
-    activity_service = ActivityLogService(db)
-    await activity_service.log_action(
-        user_id=current_user.id,
-        action="create_peternak",
-        resource="user",
-        resource_id=user.id,
-        request_info=request_info,
-        details={"username": user.username},
-    )
-    
-    return success_response(
-        data=UserResponse.model_validate(user),
-        message="Peternak berhasil dibuat",
-    )
 
