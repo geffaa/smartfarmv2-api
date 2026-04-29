@@ -9,7 +9,7 @@ Notifikasi dikirim dengan isi yang berbeda per role:
 """
 import uuid
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional, List, Dict
 
 from sqlalchemy import select, func, and_, desc, update
@@ -236,24 +236,6 @@ class NotificationService:
             data=data,
         )
 
-    async def _is_on_cooldown(
-        self,
-        kandang_id: uuid.UUID,
-        notif_type: str,
-        minutes: int,
-    ) -> bool:
-        cutoff = datetime.utcnow() - timedelta(minutes=minutes)
-        result = await self.db.execute(
-            select(Notification).where(
-                and_(
-                    Notification.kandang_id == kandang_id,
-                    Notification.type == notif_type,
-                    Notification.created_at >= cutoff,
-                )
-            ).limit(1)
-        )
-        return result.scalar_one_or_none() is not None
-
     # ── Alert: Kondisi Abnormal ───────────────────────────────────────────────
 
     async def create_classification_alert(
@@ -268,8 +250,6 @@ class NotificationService:
         Hanya dikirim jika prediksi Abnormal.
         """
         if prediction != "Abnormal":
-            return None
-        if await self._is_on_cooldown(kandang_id, NotificationType.ABNORMAL_CLASSIFICATION.value, minutes=10):
             return None
 
         kandang_name = await self._get_kandang_name(kandang_id)
@@ -364,8 +344,6 @@ class NotificationService:
         Hanya dikirim jika prediksi kematian > 1 ekor.
         """
         if predicted_death <= 1:
-            return None
-        if await self._is_on_cooldown(kandang_id, NotificationType.DEATH_FORECAST.value, minutes=30):
             return None
 
         kandang_name = await self._get_kandang_name(kandang_id)
