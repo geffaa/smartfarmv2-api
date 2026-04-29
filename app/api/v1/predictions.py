@@ -1,7 +1,7 @@
 """
 SmartFarm ML Prediction Endpoints
 """
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -14,46 +14,16 @@ from app.schemas.base import BaseResponse, success_response
 from app.services.prediction_service import PredictionService
 from app.models.kandang import Kandang
 from app.api.deps import get_current_user, get_single_kandang
-from app.ml.model_loader import load_models, predict_classification, predict_forecasting
+from app.ml.model_loader import load_models
 
 router = APIRouter()
 
 
-# ─── Schemas ──────────────────────────────────────────────────────────────────
 class ModelInfoResponse(BaseModel):
     classification_model: Dict[str, Any]
     forecasting_model: Dict[str, Any]
 
 
-class ClassifyRequest(BaseModel):
-    hari_ke: int = Field(..., description="Hari ke- dalam siklus")
-    suhu: float = Field(..., description="Suhu (°C)")
-    kelembaban: float = Field(..., description="Kelembaban (%)")
-    amoniak: float = Field(..., description="Amoniak (ppm)")
-    pakan: float = Field(0, description="Pakan (kg)")
-    minum: float = Field(0, description="Minum (L)")
-    bobot: float = Field(0, description="Bobot (g)")
-    populasi: int = Field(0, description="Populasi ayam")
-    luas_kandang: float = Field(120, description="Luas kandang (m²)")
-    hour: int = Field(12, description="Jam saat ini (0-23)")
-    kandang_id: Optional[str] = None
-
-
-class SensorHistoryItem(BaseModel):
-    temp: float = Field(..., description="Suhu (°C)")
-    hum: float = Field(..., description="Kelembaban (%)")
-    ammo: float = Field(..., description="Amoniak (ppm)")
-    Death: float = Field(0, description="Jumlah kematian pada interval ini")
-
-
-class ForecastRequest(BaseModel):
-    sensor_history: List[SensorHistoryItem] = Field(
-        ..., min_length=4, description="Minimal 4 data point sensor terakhir"
-    )
-    kandang_id: Optional[str] = None
-
-
-# ─── Endpoints ────────────────────────────────────────────────────────────────
 @router.get(
     "/models",
     response_model=BaseResponse[ModelInfoResponse],
@@ -66,49 +36,33 @@ async def get_models_info(
     model_info = ModelInfoResponse(
         classification_model={
             "name": "SmartFarm Classification Model",
-            "type": "LSTM (Long Short-Term Memory)",
-            "version": "3.0.0",
-            "scenario": "Balanced (Dampened Class Weight)",
+            "type": "RandomForestClassifier",
+            "version": "1.0.0",
             "status": "loaded",
-            "description": "Klasifikasi kondisi kandang (Normal/Abnormal) berbasis LSTM",
+            "description": "Classification model for farm condition (Normal/Abnormal)",
             "input_features": [
-                "Suhu", "Kelembaban", "Amoniak", "Pakan", "Minum", "Bobot",
-                "Populasi", "Luas Kandang", "Hour", "Session",
-                "Feed_Water_Ratio", "Density",
-                "delta_Suhu", "delta_Kelembaban", "delta_Amoniak",
-                "rolling_mean_Suhu", "rolling_mean_Kelembaban", "rolling_mean_Amoniak",
-                "rolling_std_Suhu", "rolling_std_Kelembaban", "rolling_std_Amoniak",
+                "Hari Ke-", "Suhu", "Kelembaban", "Amoniak", "Pakan",
+                "Minum", "Bobot", "Populasi", "Luas Kandang", "Hour"
             ],
-            "window_size": "12 timesteps",
             "output_classes": ["Normal", "Abnormal"],
             "metrics": {
-                "accuracy": "86.64%",
-                "f1_score": "86.52%",
-                "auc": "94.37%",
-                "specificity": "94.55%",
-            },
+                "accuracy": "97.21%",
+                "f1_score": "93.02%"
+            }
         },
         forecasting_model={
             "name": "SmartFarm Forecasting Model",
-            "type": "LSTM (Long Short-Term Memory)",
-            "version": "2.0.0",
-            "scenario": "Balanced (Sample Weights)",
+            "type": "XGBRegressor",
+            "version": "1.0.0",
             "status": "loaded",
-            "description": "Prediksi jumlah kematian ayam 30 menit ke depan (Autoregressive)",
-            "input_features": [
-                "Suhu", "Kelembaban", "Amoniak", "Hour",
-                "delta_Suhu", "delta_Kelembaban", "delta_Amoniak",
-                "rolling_mean_Suhu", "rolling_mean_Kelembaban", "rolling_mean_Amoniak",
-                "Death (autoregressive)",
-            ],
-            "window_size": "6 timesteps (3 jam lookback @ 30 menit)",
-            "resampling": "30 menit",
+            "description": "Forecasting model for chicken death prediction",
+            "input_features": ["temp", "hum", "ammo", "Death (history)"],
+            "window_size": "4 data points (2 hours)",
             "output": "predicted_death (count)",
             "metrics": {
-                "rmse": "12.9445",
-                "mae": "10.6634",
-                "r2": "0.7291",
-            },
+                "rmse": "0.2752",
+                "pearson": "0.7351"
+            }
         },
     )
 
@@ -181,115 +135,3 @@ async def get_prediction_history(
         })
 
     return success_response(data=data, message=f"{len(data)} riwayat prediksi")
-
-
-# ─── POST /classify ──────────────────────────────────────────────────────────
-@router.post(
-    "/classify",
-    summary="Run Classification Prediction",
-    description="Jalankan prediksi klasifikasi (Normal/Abnormal) berdasarkan data sensor saat ini.",
-)
-async def classify(
-    req: ClassifyRequest,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    features = {
-        'Hari Ke-': req.hari_ke,
-        'Suhu': req.suhu,
-        'Kelembaban': req.kelembaban,
-        'Amoniak': req.amoniak,
-        'Pakan': req.pakan,
-        'Minum': req.minum,
-        'Bobot': req.bobot,
-        'Populasi': req.populasi,
-        'Luas Kandang': req.luas_kandang,
-        'Hour': req.hour,
-    }
-
-    try:
-        result = predict_classification(features)
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Classification failed: {str(e)}"
-        )
-
-    # Save to database jika ada kandang_id
-    if req.kandang_id:
-        try:
-            import uuid
-            svc = PredictionService(db)
-            await svc.save_classification(
-                kandang_id=uuid.UUID(req.kandang_id),
-                prediction=result['class'],
-                confidence=result['confidence'],
-                input_data={
-                    "suhu": req.suhu,
-                    "kelembaban": req.kelembaban,
-                    "amoniak": req.amoniak,
-                    "hari_ke": req.hari_ke,
-                    "source": "api_manual",
-                },
-            )
-        except Exception:
-            pass  # Don't fail the prediction if DB save fails
-
-    return success_response(
-        data={
-            "classification": result['class'],
-            "confidence": result['confidence'],
-            "probability": result['probability'],
-        },
-        message=f"Klasifikasi: {result['class']} ({result['confidence']:.1%})",
-    )
-
-
-# ─── POST /forecast ──────────────────────────────────────────────────────────
-@router.post(
-    "/forecast",
-    summary="Run Death Forecasting",
-    description="Prediksi jumlah kematian ayam berdasarkan riwayat data sensor (min. 4 data point).",
-)
-async def forecast(
-    req: ForecastRequest,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    sensor_history = [item.model_dump() for item in req.sensor_history]
-
-    try:
-        result = predict_forecasting(sensor_history)
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Forecasting failed: {str(e)}"
-        )
-
-    has_risk = result['predicted_death'] > 0
-
-    # Save to database jika ada kandang_id
-    if req.kandang_id:
-        try:
-            import uuid
-            svc = PredictionService(db)
-            await svc.save_forecasting(
-                kandang_id=uuid.UUID(req.kandang_id),
-                predicted_death=result['predicted_death'],
-                raw_prediction=result['raw_prediction'],
-                input_data={
-                    "sensor_history": sensor_history,
-                    "source": "api_manual",
-                },
-            )
-        except Exception:
-            pass
-
-    return success_response(
-        data={
-            "predicted_death": result['predicted_death'],
-            "raw_prediction": result['raw_prediction'],
-            "has_risk": has_risk,
-        },
-        message=f"Prediksi: {result['predicted_death']} kematian {'⚠️ RISIKO' if has_risk else '(aman)'}",
-    )
