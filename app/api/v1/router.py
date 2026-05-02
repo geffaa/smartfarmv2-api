@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import auth, users, activity_logs, kandangs, predictions, sensor_data, notifications, death_reports, daily_logs
+from app.api.v1 import auth, users, activity_logs, kandangs, predictions, predictions_dl, sensor_data, notifications, death_reports, daily_logs
 
 api_router = APIRouter()
 
@@ -34,6 +34,12 @@ api_router.include_router(
     predictions.router,
     prefix="/predictions",
     tags=["Predictions"],
+)
+
+api_router.include_router(
+    predictions_dl.router,
+    prefix="/predictions-dl",
+    tags=["Predictions Deep Learning"],
 )
 
 api_router.include_router(
