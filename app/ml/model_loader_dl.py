@@ -8,11 +8,12 @@ Classification: LSTM Balanced (Dampened) — 21 fitur, window=12
 Forecasting:    LSTM Balanced — 11 fitur, window=6, resampled 30min
 """
 import logging
+import random
 import joblib
 import numpy as np
 from pathlib import Path
 from collections import deque
-from typing import Optional
+from typing import Optional, List
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +26,9 @@ classification_scaler = None
 forecasting_model = None
 forecasting_scaler = None
 
-# Sliding-window buffers (per-kandang bisa diperluas di masa depan)
-_cls_raw_buffer: deque = deque(maxlen=20)   # raw features sebelum FE
-_fc_raw_buffer: deque = deque(maxlen=20)    # raw sensor for forecasting
+# Sliding-window buffers (fallback jika DB history tidak tersedia)
+_cls_raw_buffer: deque = deque(maxlen=20)
+_fc_raw_buffer: deque = deque(maxlen=20)
 
 # ─── Configuration (harus sama persis dengan notebook) ────────────────────────
 CLS_TIME_STEPS = 12
@@ -103,6 +104,28 @@ def load_models():
         logger.error("Pastikan file .h5 dan .pkl ada di folder trained_models/")
 
 
+# ─── Padding Helper ───────────────────────────────────────────────────────────
+def _pad_history(history: list, needed: int, jitter_keys: list) -> list:
+    """Pad list history ke jumlah `needed` dengan menambah jitter di awal.
+    
+    Jitter ditambahkan pada key yang ada di `jitter_keys` agar delta & std
+    tidak bernilai nol (yang akan membingungkan model).
+    """
+    if not history:
+        return history
+    while len(history) < needed:
+        ref = history[0]
+        padded_point = {}
+        for k, v in ref.items():
+            if k in jitter_keys and isinstance(v, (int, float)):
+                noise = random.gauss(0, max(abs(float(v)) * 0.02, 0.01))
+                padded_point[k] = max(0.0, float(v) + noise) if k == 'Amoniak' else float(v) + noise
+            else:
+                padded_point[k] = v
+        history.insert(0, padded_point)
+    return history
+
+
 # ─── Feature Engineering Helpers ──────────────────────────────────────────────
 def _hour_to_session(hour: int) -> int:
     """Convert jam ke session: 0=malam(0-6), 1=pagi(6-12), 2=siang(12-18), 3=sore(18-24)."""
@@ -161,8 +184,17 @@ def _compute_forecasting_features(raw_points: list) -> Optional[np.ndarray]:
     return window.reshape(1, FC_TIME_STEPS, len(FC_FEATURES))
 
 
-# ─── Prediction Functions (API tetap sama!) ───────────────────────────────────
-def predict_classification(features: dict) -> dict:
+# ─── Prediction Functions ─────────────────────────────────────────────────────
+def predict_classification(features: dict, db_history: list = None) -> dict:
+    """
+    Prediksi klasifikasi kondisi kandang (Normal/Abnormal).
+
+    Args:
+        features: Data sensor saat ini (single data point dari request).
+        db_history: (Opsional) Riwayat sensor dari DB, diurutkan TERLAMA → TERBARU.
+                    List of dicts: {Suhu, Kelembaban, Amoniak, Pakan, Minum,
+                                    Bobot, Populasi, Luas Kandang, Hour}
+    """
     if classification_model is None or classification_scaler is None:
         load_models()
     
@@ -180,17 +212,36 @@ def predict_classification(features: dict) -> dict:
         'Luas Kandang': float(features.get('Luas Kandang', 120)),
         'Hour': int(features.get('Hour', 12)),
     }
-    _cls_raw_buffer.append(raw_point)
 
-    X = _compute_classification_features(list(_cls_raw_buffer))
+    needed = CLS_TIME_STEPS + CLS_ROLLING_WINDOW  # 18
+    jitter_keys = ['Suhu', 'Kelembaban', 'Amoniak']
+    X = None
 
+    # ── Prioritas 1: Data real dari database ─────────────────────────────
+    if db_history is not None and len(db_history) > 0:
+        history = list(db_history)
+        if len(history) < needed:
+            _pad_history(history, needed, jitter_keys)
+        X = _compute_classification_features(history[-needed:])
+        if X is not None:
+            logger.info(f"Classification: menggunakan {len(db_history)} data DB")
+
+    # ── Prioritas 2: Buffer in-memory (backward compatible) ──────────────
     if X is None:
-        needed = CLS_TIME_STEPS + CLS_ROLLING_WINDOW
-        padded = [raw_point] * needed
+        _cls_raw_buffer.append(raw_point)
+        X = _compute_classification_features(list(_cls_raw_buffer))
+        if X is not None:
+            logger.info(f"Classification: menggunakan buffer ({len(_cls_raw_buffer)} data)")
+
+    # ── Prioritas 3: Padding jitter (last resort) ────────────────────────
+    if X is None:
+        padded = [raw_point]
+        _pad_history(padded, needed, jitter_keys)
         X = _compute_classification_features(padded)
         if X is None:
-            logger.warning("Classification: tidak bisa membangun window, fallback Normal")
+            logger.warning("Classification: semua strategi gagal, fallback Normal")
             return {'class': 'Normal', 'probability': 0.5, 'confidence': 0.5}
+        logger.info("Classification: menggunakan jitter fallback")
 
     pred_prob = float(classification_model.predict(X, verbose=0)[0][0])
     pred_class = 'Abnormal' if pred_prob > 0.5 else 'Normal'
@@ -202,7 +253,15 @@ def predict_classification(features: dict) -> dict:
     }
 
 
-def predict_forecasting(sensor_history: list) -> dict:
+def predict_forecasting(sensor_history: list, db_history: list = None) -> dict:
+    """
+    Prediksi jumlah kematian ayam (forecasting).
+
+    Args:
+        sensor_history: Data dari request body (list of {temp, hum, ammo, Death}).
+        db_history: (Opsional) Riwayat sensor dari DB, diurutkan TERLAMA → TERBARU.
+                    List of dicts: {Suhu, Kelembaban, Amoniak, Hour, Death}
+    """
     if forecasting_model is None or forecasting_scaler is None:
         load_models()
 
@@ -212,20 +271,36 @@ def predict_forecasting(sensor_history: list) -> dict:
     from datetime import datetime
     current_hour = datetime.now().hour
 
-    for point in sensor_history:
-        raw_point = {
-            'Suhu': float(point.get('temp', 0)),
-            'Kelembaban': float(point.get('hum', 0)),
-            'Amoniak': float(point.get('ammo', 0)),
-            'Hour': current_hour,
-            'Death': float(point.get('Death', 0)),
-        }
-        _fc_raw_buffer.append(raw_point)
+    needed = FC_TIME_STEPS + FC_ROLLING_WINDOW  # 9
+    jitter_keys = ['Suhu', 'Kelembaban', 'Amoniak']
+    X = None
 
-    X = _compute_forecasting_features(list(_fc_raw_buffer))
+    # ── Prioritas 1: Data real dari database ─────────────────────────────
+    if db_history is not None and len(db_history) > 0:
+        history = list(db_history)
+        if len(history) < needed:
+            _pad_history(history, needed, jitter_keys)
+        X = _compute_forecasting_features(history[-needed:])
+        if X is not None:
+            logger.info(f"Forecasting: menggunakan {len(db_history)} data DB")
 
+    # ── Prioritas 2: Buffer in-memory (backward compatible) ──────────────
     if X is None:
-        needed = FC_TIME_STEPS + FC_ROLLING_WINDOW
+        for point in sensor_history:
+            raw_point = {
+                'Suhu': float(point.get('temp', 0)),
+                'Kelembaban': float(point.get('hum', 0)),
+                'Amoniak': float(point.get('ammo', 0)),
+                'Hour': current_hour,
+                'Death': float(point.get('Death', 0)),
+            }
+            _fc_raw_buffer.append(raw_point)
+        X = _compute_forecasting_features(list(_fc_raw_buffer))
+        if X is not None:
+            logger.info(f"Forecasting: menggunakan buffer ({len(_fc_raw_buffer)} data)")
+
+    # ── Prioritas 3: Padding jitter (last resort) ────────────────────────
+    if X is None:
         last_point = {
             'Suhu': float(sensor_history[-1].get('temp', 0)),
             'Kelembaban': float(sensor_history[-1].get('hum', 0)),
@@ -233,11 +308,13 @@ def predict_forecasting(sensor_history: list) -> dict:
             'Hour': current_hour,
             'Death': float(sensor_history[-1].get('Death', 0)),
         }
-        padded = [last_point] * needed
+        padded = [last_point]
+        _pad_history(padded, needed, jitter_keys)
         X = _compute_forecasting_features(padded)
         if X is None:
-            logger.warning("Forecasting: tidak bisa membangun window, fallback 0")
+            logger.warning("Forecasting: semua strategi gagal, fallback 0")
             return {'predicted_death': 0, 'raw_prediction': 0.0}
+        logger.info("Forecasting: menggunakan jitter fallback")
 
     pred_scaled = float(forecasting_model.predict(X, verbose=0)[0][0])
 
