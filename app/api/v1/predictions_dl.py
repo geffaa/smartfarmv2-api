@@ -1,21 +1,29 @@
 """
-SmartFarm ML Prediction Endpoints
+SmartFarm ML Prediction Endpoints (Deep Learning — LSTM)
 """
+import uuid
+import logging
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.user import User
+from app.models.kandang import Kandang
+from app.models.sensor_data import SensorData
 from app.schemas.base import BaseResponse, success_response
 from app.services.prediction_service import PredictionService
-from app.models.kandang import Kandang
 from app.api.deps import get_current_user, get_single_kandang
-from app.ml.model_loader_dl import load_models, predict_classification, predict_forecasting
+from app.ml.model_loader_dl import (
+    load_models, predict_classification, predict_forecasting,
+    CLS_TIME_STEPS, CLS_ROLLING_WINDOW, FC_TIME_STEPS, FC_ROLLING_WINDOW,
+)
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -51,6 +59,66 @@ class ForecastRequest(BaseModel):
         ..., min_length=4, description="Minimal 4 data point sensor terakhir"
     )
     kandang_id: Optional[str] = None
+
+
+# ─── DB Query Helpers ─────────────────────────────────────────────────────────
+async def _resolve_kandang_id(
+    kandang_id_str: Optional[str], db: AsyncSession
+) -> Optional[uuid.UUID]:
+    """Resolve kandang_id dari request atau fallback ke single kandang aktif."""
+    if kandang_id_str:
+        try:
+            return uuid.UUID(kandang_id_str)
+        except ValueError:
+            pass
+    # Fallback: ambil kandang aktif pertama
+    result = await db.execute(
+        select(Kandang).where(Kandang.is_active == True).limit(1)
+    )
+    kandang = result.scalar_one_or_none()
+    return kandang.id if kandang else None
+
+
+async def _fetch_sensor_history(
+    db: AsyncSession, kandang_id: uuid.UUID, limit: int
+) -> List[SensorData]:
+    """Ambil N data sensor terakhir, diurutkan TERLAMA → TERBARU."""
+    query = (
+        select(SensorData)
+        .where(SensorData.kandang_id == kandang_id)
+        .order_by(desc(SensorData.timestamp))
+        .limit(limit)
+    )
+    result = await db.execute(query)
+    records = list(result.scalars().all())
+    records.reverse()  # terlama dulu → terbaru di akhir
+    return records
+
+
+def _sensor_to_cls_dict(s: SensorData, luas_kandang: float = 120.0) -> dict:
+    """Konversi SensorData row ke dict untuk classification model."""
+    return {
+        'Suhu': float(s.suhu),
+        'Kelembaban': float(s.kelembaban),
+        'Amoniak': float(s.amoniak),
+        'Pakan': float(s.pakan or 0),
+        'Minum': float(s.minum or 0),
+        'Bobot': float(s.bobot or 0),
+        'Populasi': float(s.populasi or 0),
+        'Luas Kandang': luas_kandang,
+        'Hour': s.timestamp.hour if s.timestamp else 12,
+    }
+
+
+def _sensor_to_fc_dict(s: SensorData) -> dict:
+    """Konversi SensorData row ke dict untuk forecasting model."""
+    return {
+        'Suhu': float(s.suhu),
+        'Kelembaban': float(s.kelembaban),
+        'Amoniak': float(s.amoniak),
+        'Hour': s.timestamp.hour if s.timestamp else 12,
+        'Death': float(s.death or 0),
+    }
 
 
 # ─── Endpoints ────────────────────────────────────────────────────────────────
@@ -207,21 +275,32 @@ async def classify(
         'Hour': req.hour,
     }
 
+    # ── Query riwayat sensor dari database ────────────────────────────────
+    db_history = None
+    kandang_uuid = await _resolve_kandang_id(req.kandang_id, db)
+
+    if kandang_uuid:
+        cls_needed = CLS_TIME_STEPS + CLS_ROLLING_WINDOW  # 18
+        sensors = await _fetch_sensor_history(db, kandang_uuid, limit=cls_needed)
+        if sensors:
+            db_history = [_sensor_to_cls_dict(s, req.luas_kandang) for s in sensors]
+            logger.info(f"Classify: ditemukan {len(sensors)} data sensor di DB")
+
+    # ── Jalankan prediksi ─────────────────────────────────────────────────
     try:
-        result = predict_classification(features)
+        result = predict_classification(features, db_history=db_history)
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Classification failed: {str(e)}"
         )
 
-    # Save to database jika ada kandang_id
-    if req.kandang_id:
+    # ── Simpan ke database ────────────────────────────────────────────────
+    if kandang_uuid:
         try:
-            import uuid
             svc = PredictionService(db)
             await svc.save_classification(
-                kandang_id=uuid.UUID(req.kandang_id),
+                kandang_id=kandang_uuid,
                 prediction=result['class'],
                 confidence=result['confidence'],
                 input_data={
@@ -230,6 +309,7 @@ async def classify(
                     "amoniak": req.amoniak,
                     "hari_ke": req.hari_ke,
                     "source": "api_manual",
+                    "db_history_count": len(db_history) if db_history else 0,
                 },
             )
         except Exception:
@@ -258,8 +338,20 @@ async def forecast(
 ):
     sensor_history = [item.model_dump() for item in req.sensor_history]
 
+    # ── Query riwayat sensor dari database ────────────────────────────────
+    db_history = None
+    kandang_uuid = await _resolve_kandang_id(req.kandang_id, db)
+
+    if kandang_uuid:
+        fc_needed = FC_TIME_STEPS + FC_ROLLING_WINDOW  # 9
+        sensors = await _fetch_sensor_history(db, kandang_uuid, limit=fc_needed)
+        if sensors:
+            db_history = [_sensor_to_fc_dict(s) for s in sensors]
+            logger.info(f"Forecast: ditemukan {len(sensors)} data sensor di DB")
+
+    # ── Jalankan prediksi ─────────────────────────────────────────────────
     try:
-        result = predict_forecasting(sensor_history)
+        result = predict_forecasting(sensor_history, db_history=db_history)
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -268,18 +360,18 @@ async def forecast(
 
     has_risk = result['predicted_death'] > 0
 
-    # Save to database jika ada kandang_id
-    if req.kandang_id:
+    # ── Simpan ke database ────────────────────────────────────────────────
+    if kandang_uuid:
         try:
-            import uuid
             svc = PredictionService(db)
             await svc.save_forecasting(
-                kandang_id=uuid.UUID(req.kandang_id),
+                kandang_id=kandang_uuid,
                 predicted_death=result['predicted_death'],
                 raw_prediction=result['raw_prediction'],
                 input_data={
                     "sensor_history": sensor_history,
                     "source": "api_manual",
+                    "db_history_count": len(db_history) if db_history else 0,
                 },
             )
         except Exception:
