@@ -100,13 +100,36 @@ async def reload_models(
 
 
 @router.get(
+    "/summary",
+    summary="Get Prediction Summary",
+    description="Ringkasan jumlah prediksi ML (normal/abnormal, aman/risiko)",
+)
+async def get_prediction_summary(
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    _: User = Depends(get_current_user),
+    kandang: Kandang = Depends(get_single_kandang),
+    db: AsyncSession = Depends(get_db),
+):
+    start = start_date.date() if start_date else None
+    end = end_date.date() if end_date else None
+
+    svc = PredictionService(db)
+    summary = await svc.get_summary(kandang.id, model_type="ml", start_date=start, end_date=end)
+    return success_response(data=summary, message="Ringkasan prediksi ML")
+
+
+@router.get(
     "/history",
     summary="Get Prediction History",
     description="Riwayat hasil prediksi ML dari IoT (classification & forecasting)",
 )
 async def get_prediction_history(
     type: Optional[str] = None,
-    limit: int = 1000,
+    page: int = 1,
+    page_size: int = 50,
+    sort_by: str = "created_at",
+    sort_order: str = "desc",
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
     _: User = Depends(get_current_user),
@@ -115,15 +138,35 @@ async def get_prediction_history(
 ):
     import json
 
+    if sort_by not in ("created_at", "prediction", "confidence", "predicted_death", "raw_prediction"):
+        sort_by = "created_at"
+    if sort_order not in ("asc", "desc"):
+        sort_order = "desc"
+    if page < 1:
+        page = 1
+    if page_size < 1 or page_size > 200:
+        page_size = 50
+
     start = start_date.date() if start_date else None
     end = end_date.date() if end_date else None
+    offset = (page - 1) * page_size
 
     svc = PredictionService(db)
-    records = await svc.get_history(kandang.id, limit=limit, prediction_type=type, model_type="ml", start_date=start, end_date=end)
+    records, total = await svc.get_history(
+        kandang.id,
+        page_size=page_size,
+        offset=offset,
+        prediction_type=type,
+        model_type="ml",
+        start_date=start,
+        end_date=end,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
 
-    data = []
+    items = []
     for r in records:
-        data.append({
+        items.append({
             "id": str(r.id),
             "type": r.type,
             "prediction": r.prediction,
@@ -134,4 +177,7 @@ async def get_prediction_history(
             "created_at": r.created_at.isoformat(),
         })
 
-    return success_response(data=data, message=f"{len(data)} riwayat prediksi")
+    return success_response(
+        data={"items": items, "total": total, "page": page, "page_size": page_size},
+        message=f"{total} riwayat prediksi",
+    )

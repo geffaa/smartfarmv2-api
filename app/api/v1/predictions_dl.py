@@ -215,8 +215,8 @@ async def reload_models(
 
 @router.get(
     "/history",
-    summary="Get Prediction History",
-    description="Riwayat hasil prediksi ML dari IoT (classification & forecasting)",
+    summary="Get Prediction History (DL)",
+    description="Riwayat hasil prediksi Deep Learning (classification & forecasting)",
 )
 async def get_prediction_history(
     type: Optional[str] = None,
@@ -233,7 +233,15 @@ async def get_prediction_history(
     end = end_date.date() if end_date else None
 
     svc = PredictionService(db)
-    records = await svc.get_history(kandang.id, limit=limit, prediction_type=type, model_type="dl", start_date=start, end_date=end)
+    records, _ = await svc.get_history(
+        kandang.id,
+        page_size=limit,
+        offset=0,
+        prediction_type=type,
+        model_type="dl",
+        start_date=start,
+        end_date=end,
+    )
 
     data = []
     for r in records:
@@ -248,7 +256,7 @@ async def get_prediction_history(
             "created_at": r.created_at.isoformat(),
         })
 
-    return success_response(data=data, message=f"{len(data)} riwayat prediksi")
+    return success_response(data=data, message=f"{len(data)} riwayat prediksi DL")
 
 
 # ─── POST /classify ──────────────────────────────────────────────────────────
