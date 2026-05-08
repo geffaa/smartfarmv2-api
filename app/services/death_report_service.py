@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta
 from typing import Optional, List
 
 from sqlalchemy import select, func, and_, desc
@@ -32,26 +32,15 @@ class DeathReportService:
         return report
 
     async def get_total_today(self, kandang_id: uuid.UUID) -> int:
-        today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        WIB = timedelta(hours=7)
+        now_wib = datetime.utcnow() + WIB
+        today_start = (now_wib.replace(hour=0, minute=0, second=0, microsecond=0) - WIB)
         result = await self.db.execute(
             select(func.coalesce(func.sum(DeathReport.count), 0))
             .where(
                 and_(
                     DeathReport.kandang_id == kandang_id,
                     DeathReport.timestamp >= today_start,
-                )
-            )
-        )
-        return int(result.scalar() or 0)
-
-    async def get_since(self, kandang_id: uuid.UUID, since: datetime) -> int:
-        """Deaths reported since a specific timestamp (for per-interval delta)."""
-        result = await self.db.execute(
-            select(func.coalesce(func.sum(DeathReport.count), 0))
-            .where(
-                and_(
-                    DeathReport.kandang_id == kandang_id,
-                    DeathReport.timestamp > since,
                 )
             )
         )
