@@ -57,6 +57,34 @@ class DeathReportService:
         )
         return int(result.scalar() or 0)
 
+    async def get_by_id(self, report_id: uuid.UUID, kandang_id: uuid.UUID) -> Optional[DeathReport]:
+        result = await self.db.execute(
+            select(DeathReport).where(DeathReport.id == report_id, DeathReport.kandang_id == kandang_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def update(self, report_id: uuid.UUID, kandang_id: uuid.UUID, count: Optional[int], notes: Optional[str], timestamp: Optional[datetime]) -> Optional[DeathReport]:
+        report = await self.get_by_id(report_id, kandang_id)
+        if not report:
+            return None
+        if count is not None:
+            report.count = count
+        if notes is not None:
+            report.notes = notes
+        if timestamp is not None:
+            report.timestamp = timestamp
+        await self.db.commit()
+        await self.db.refresh(report)
+        return report
+
+    async def delete(self, report_id: uuid.UUID, kandang_id: uuid.UUID) -> bool:
+        report = await self.get_by_id(report_id, kandang_id)
+        if not report:
+            return False
+        await self.db.delete(report)
+        await self.db.commit()
+        return True
+
     async def get_list(
         self,
         kandang_id: uuid.UUID,

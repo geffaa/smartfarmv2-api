@@ -60,6 +60,31 @@ class DailyLogService:
     async def get_today(self, kandang_id: uuid.UUID) -> Optional[DailyLog]:
         return await self.get_by_date(kandang_id, date.today())
 
+    async def get_by_id(self, log_id: uuid.UUID, kandang_id: uuid.UUID) -> Optional[DailyLog]:
+        result = await self.db.execute(
+            select(DailyLog).where(DailyLog.id == log_id, DailyLog.kandang_id == kandang_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def update(self, log_id: uuid.UUID, kandang_id: uuid.UUID, data: "DailyLogCreate") -> Optional[DailyLog]:
+        log = await self.get_by_id(log_id, kandang_id)
+        if not log:
+            return None
+        update_fields = data.model_dump(exclude_unset=True)
+        for field, value in update_fields.items():
+            setattr(log, field, value)
+        await self.db.commit()
+        await self.db.refresh(log)
+        return log
+
+    async def delete(self, log_id: uuid.UUID, kandang_id: uuid.UUID) -> bool:
+        log = await self.get_by_id(log_id, kandang_id)
+        if not log:
+            return False
+        await self.db.delete(log)
+        await self.db.commit()
+        return True
+
     async def get_list(
         self,
         kandang_id: uuid.UUID,

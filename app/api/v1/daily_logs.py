@@ -1,5 +1,6 @@
+import uuid
 import datetime
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -31,6 +32,42 @@ async def create_daily_log(
         data=DailyLogResponse.model_validate(log),
         message="Log harian berhasil disimpan",
     )
+
+
+@router.put(
+    "/{log_id}",
+    response_model=BaseResponse[DailyLogResponse],
+    summary="Edit Log Harian",
+)
+async def update_daily_log(
+    log_id: uuid.UUID,
+    data: DailyLogCreate,
+    current_user: User = Depends(get_current_user),
+    kandang: Kandang = Depends(get_single_kandang),
+    db: AsyncSession = Depends(get_db),
+):
+    service = DailyLogService(db)
+    log = await service.update(log_id, kandang.id, data)
+    if not log:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Log tidak ditemukan")
+    return success_response(data=DailyLogResponse.model_validate(log), message="Log harian berhasil diperbarui")
+
+
+@router.delete(
+    "/{log_id}",
+    summary="Hapus Log Harian",
+)
+async def delete_daily_log(
+    log_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    kandang: Kandang = Depends(get_single_kandang),
+    db: AsyncSession = Depends(get_db),
+):
+    service = DailyLogService(db)
+    deleted = await service.delete(log_id, kandang.id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Log tidak ditemukan")
+    return success_response(data={"id": str(log_id)}, message="Log harian berhasil dihapus")
 
 
 @router.get(
