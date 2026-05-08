@@ -23,11 +23,13 @@ class PredictionService:
         confidence: float,
         input_data: dict,
         sensor_data_id: Optional[uuid.UUID] = None,
+        model_type: str = "ml",
     ) -> Prediction:
         record = Prediction(
             kandang_id=kandang_id,
             sensor_data_id=sensor_data_id,
             type="classification",
+            model_type=model_type,
             prediction=prediction,
             confidence=confidence,
             input_data=json.dumps(input_data),
@@ -44,11 +46,13 @@ class PredictionService:
         raw_prediction: float,
         input_data: dict,
         sensor_data_id: Optional[uuid.UUID] = None,
+        model_type: str = "ml",
     ) -> Prediction:
         record = Prediction(
             kandang_id=kandang_id,
             sensor_data_id=sensor_data_id,
             type="forecasting",
+            model_type=model_type,
             predicted_death=predicted_death,
             raw_prediction=raw_prediction,
             input_data=json.dumps(input_data),
@@ -63,10 +67,14 @@ class PredictionService:
         kandang_id: uuid.UUID,
         limit: int = 1000,
         prediction_type: Optional[str] = None,
+        model_type: str = "ml",
         start_date: Optional[datetime.date] = None,
         end_date: Optional[datetime.date] = None,
     ) -> List[Prediction]:
-        query = select(Prediction).where(Prediction.kandang_id == kandang_id)
+        query = select(Prediction).where(
+            Prediction.kandang_id == kandang_id,
+            Prediction.model_type == model_type,
+        )
         if prediction_type:
             query = query.where(Prediction.type == prediction_type)
         if start_date:

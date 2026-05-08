@@ -233,7 +233,7 @@ async def get_prediction_history(
     end = end_date.date() if end_date else None
 
     svc = PredictionService(db)
-    records = await svc.get_history(kandang.id, limit=limit, prediction_type=type, start_date=start, end_date=end)
+    records = await svc.get_history(kandang.id, limit=limit, prediction_type=type, model_type="dl", start_date=start, end_date=end)
 
     data = []
     for r in records:
@@ -311,6 +311,7 @@ async def classify(
                     "source": "api_manual",
                     "db_history_count": len(db_history) if db_history else 0,
                 },
+                model_type="dl",
             )
         except Exception:
             pass  # Don't fail the prediction if DB save fails
@@ -373,6 +374,7 @@ async def forecast(
                     "source": "api_manual",
                     "db_history_count": len(db_history) if db_history else 0,
                 },
+                model_type="dl",
             )
         except Exception:
             pass

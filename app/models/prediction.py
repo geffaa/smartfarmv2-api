@@ -41,6 +41,9 @@ class Prediction(Base):
     # "classification" atau "forecasting"
     type: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
 
+    # "ml" (Machine Learning) atau "dl" (Deep Learning)
+    model_type: Mapped[str] = mapped_column(String(5), nullable=False, default="ml", server_default="ml", index=True)
+
     # Classification fields
     prediction: Mapped[Optional[str]] = mapped_column(
         String(20), nullable=True, comment="Normal / Abnormal"

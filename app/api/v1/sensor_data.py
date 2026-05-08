@@ -114,6 +114,7 @@ async def create_sensor_data_iot(
                 confidence=cls_result['confidence'],
                 input_data={"suhu": data.temperature, "kelembaban": data.humidity, "amoniak": data.ammonia, "hari_ke": hari_ke, "source": "iot_auto"},
                 sensor_data_id=sensor_data.id,
+                model_type="ml",
             )
         except Exception as log_err:
             logger.warning(f"IoT classification save failed: {log_err}")
@@ -122,7 +123,6 @@ async def create_sensor_data_iot(
             try:
                 notification_service = NotificationService(db)
                 await notification_service.create_classification_alert(
-                    user_id=kandang.pemilik_id,
                     kandang_id=kandang.id,
                     prediction=cls_result['class'],
                     sensor_data=features,
@@ -139,7 +139,7 @@ async def create_sensor_data_iot(
 
         last_fc_result = await db.execute(
             sa_select(Prediction.created_at)
-            .where(Prediction.kandang_id == kandang.id, Prediction.type == "forecasting")
+            .where(Prediction.kandang_id == kandang.id, Prediction.type == "forecasting", Prediction.model_type == "ml")
             .order_by(sa_desc(Prediction.created_at))
             .limit(1)
         )
@@ -169,6 +169,7 @@ async def create_sensor_data_iot(
                     raw_prediction=fc_result['raw_prediction'],
                     input_data={"sensor_history": sensor_history, "source": "iot_auto"},
                     sensor_data_id=sensor_data.id,
+                    model_type="ml",
                 )
             except Exception as fc_save_err:
                 logger.warning(f"IoT forecasting save failed: {fc_save_err}")
@@ -177,7 +178,6 @@ async def create_sensor_data_iot(
                 try:
                     notification_service = NotificationService(db)
                     await notification_service.create_death_forecast_alert(
-                        user_id=kandang.pemilik_id,
                         kandang_id=kandang.id,
                         predicted_death=fc_result['predicted_death'],
                         raw_prediction=fc_result['raw_prediction'],
@@ -262,7 +262,6 @@ async def create_sensor_data(
             try:
                 notification_service = NotificationService(db)
                 await notification_service.create_classification_alert(
-                    user_id=current_user.id,
                     kandang_id=kandang.id,
                     prediction=cls_result['class'],
                     sensor_data=features,
@@ -290,7 +289,6 @@ async def create_sensor_data(
                 try:
                     notification_service = NotificationService(db)
                     await notification_service.create_death_forecast_alert(
-                        user_id=current_user.id,
                         kandang_id=kandang.id,
                         predicted_death=fc_result['predicted_death'],
                         raw_prediction=fc_result['raw_prediction'],

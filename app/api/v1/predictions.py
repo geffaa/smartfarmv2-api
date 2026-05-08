@@ -119,7 +119,7 @@ async def get_prediction_history(
     end = end_date.date() if end_date else None
 
     svc = PredictionService(db)
-    records = await svc.get_history(kandang.id, limit=limit, prediction_type=type, start_date=start, end_date=end)
+    records = await svc.get_history(kandang.id, limit=limit, prediction_type=type, model_type="ml", start_date=start, end_date=end)
 
     data = []
     for r in records:

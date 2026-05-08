@@ -12,7 +12,7 @@ from app.schemas.kandang import KandangUpdate, KandangResponse
 from app.schemas.base import BaseResponse, success_response
 from app.services.kandang_service import KandangService
 from app.services.activity_log_service import ActivityLogService
-from app.api.deps import get_current_user, require_pemilik_or_admin, get_request_info
+from app.api.deps import get_current_user, require_roles, get_request_info
 
 router = APIRouter()
 
@@ -57,7 +57,7 @@ async def update_kandang(
     kandang_id: uuid.UUID,
     request: Request,
     kandang_data: KandangUpdate,
-    current_user: User = Depends(require_pemilik_or_admin()),
+    current_user: User = Depends(require_roles(UserRole.PETERNAK)),
     db: AsyncSession = Depends(get_db),
 ):
     kandang_service = KandangService(db)
@@ -68,13 +68,6 @@ async def update_kandang(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Kandang tidak ditemukan",
         )
-
-    if current_user.role == UserRole.PEMILIK:
-        if kandang.pemilik_id != current_user.id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Akses ditolak",
-            )
 
     updated = await kandang_service.update(kandang, kandang_data)
 

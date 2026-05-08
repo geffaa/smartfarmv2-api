@@ -33,9 +33,16 @@ class ConnectionManager:
 
     async def connect(self, websocket: WebSocket, user_id: str):
         await websocket.accept()
-        if user_id not in self.active_connections:
+        # Close any stale connections for this user before registering new one
+        if user_id in self.active_connections:
+            stale = list(self.active_connections[user_id])
             self.active_connections[user_id] = []
-        self.active_connections[user_id].append(websocket)
+            for old_ws in stale:
+                try:
+                    await old_ws.close(code=1000)
+                except Exception:
+                    pass
+        self.active_connections[user_id] = [websocket]
         print(f"🔗 WebSocket connected for user {user_id}")
 
     def disconnect(self, websocket: WebSocket, user_id: str):
@@ -258,7 +265,6 @@ class NotificationService:
 
     async def create_classification_alert(
         self,
-        user_id: uuid.UUID,
         kandang_id: uuid.UUID,
         prediction: str,
         sensor_data: dict,
@@ -354,7 +360,6 @@ class NotificationService:
 
     async def create_death_forecast_alert(
         self,
-        user_id: uuid.UUID,
         kandang_id: uuid.UUID,
         predicted_death: int,
         raw_prediction: float,

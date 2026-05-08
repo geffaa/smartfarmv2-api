@@ -49,21 +49,24 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.app_name,
     description="""
-    SmartFarm API - Backend untuk aplikasi SmartFarm
+    SmartFarm API - Backend untuk aplikasi monitoring kandang ayam broiler berbasis IoT dan ML.
 
     ## Features
 
     * **Authentication** - JWT-based auth dengan access & refresh token
-    * **User Management** - CRUD untuk admin, pemilik, dan peternak
-    * **Kandang Management** - CRUD untuk manajemen kandang
-    * **Activity Logs** - Tracking aktivitas user dari web dan mobile
-    * **ML Predictions** - Endpoint untuk klasifikasi dan forecasting (coming soon)
+    * **Kandang Management** - CRUD kandang beserta manajemen siklus ternak
+    * **Sensor Data** - Penerimaan data IoT dari ESP32 (suhu, kelembaban, amonia) dan input manual oleh admin
+    * **Daily Logs** - Pencatatan harian pakan, minum, populasi, dan bobot ayam
+    * **Death Reports** - Pelaporan dan rekap kematian ayam per kandang
+    * **ML Predictions** - Klasifikasi kondisi kandang (Normal/Abnormal) dan forecasting berbasis RandomForest & LSTM
+    * **Notifications** - Riwayat notifikasi dan real-time push via WebSocket
+    * **Activity Logs** - Audit trail aktivitas pengguna dari web dan mobile
 
     ## Roles
 
-    * **Admin** - Full access ke semua fitur
+    * **Admin** - Full access ke semua fitur termasuk input manual dan reload model ML
     * **Pemilik** - Manage kandang dan peternak miliknya
-    * **Peternak** - View access ke kandang pemilik
+    * **Peternak** - Input log harian dan laporan kematian pada kandang yang dikelola
     """,
     version="1.0.0",
     docs_url="/docs",
