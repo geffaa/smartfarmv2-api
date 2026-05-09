@@ -37,13 +37,18 @@ async def send_daily_log_reminder():
     from app.services.notification_service import NotificationService
     from app.services.fonnte_service import send_whatsapp
     from app.schemas.notification import NotificationCreate
-    from sqlalchemy import select, func
+    from sqlalchemy import select, func, text
 
     now      = datetime.now()
     today_str   = now.strftime("%d %b %Y")
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
     async with AsyncSessionLocal() as db:
+        # Advisory lock agar hanya satu proses (instance) yang menjalankan job ini
+        lock_result = await db.execute(text("SELECT pg_try_advisory_lock(1001)"))
+        if not lock_result.scalar():
+            logger.info("Daily log reminder: instance lain sedang berjalan, dilewati")
+            return
         try:
             kandangs_result = await db.execute(
                 select(Kandang).where(Kandang.is_active == True)
@@ -187,6 +192,8 @@ async def send_daily_log_reminder():
 
         except Exception as e:
             logger.error(f"Daily log reminder job failed: {e}")
+        finally:
+            await db.execute(text("SELECT pg_advisory_unlock(1001)"))
 
 
 async def check_iot_offline():
@@ -203,7 +210,7 @@ async def check_iot_offline():
     from app.services.notification_service import NotificationService
     from app.services.fonnte_service import send_whatsapp
     from app.schemas.notification import NotificationCreate
-    from sqlalchemy import select, func
+    from sqlalchemy import select, func, text
     from datetime import timedelta
 
     now               = datetime.utcnow()
@@ -211,6 +218,11 @@ async def check_iot_offline():
     cooldown_threshold = now - timedelta(hours=1)
 
     async with AsyncSessionLocal() as db:
+        # Advisory lock agar hanya satu proses (instance) yang menjalankan job ini
+        lock_result = await db.execute(text("SELECT pg_try_advisory_lock(1002)"))
+        if not lock_result.scalar():
+            logger.info("IoT offline check: instance lain sedang berjalan, dilewati")
+            return
         try:
             kandangs_result = await db.execute(
                 select(Kandang).where(Kandang.is_active == True)
@@ -311,6 +323,8 @@ async def check_iot_offline():
 
         except Exception as e:
             logger.error(f"IoT offline check job failed: {e}")
+        finally:
+            await db.execute(text("SELECT pg_advisory_unlock(1002)"))
 
 
 def start_scheduler():
