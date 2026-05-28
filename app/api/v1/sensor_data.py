@@ -183,6 +183,123 @@ async def create_sensor_data_iot(
         logger.warning(f"IoT auto-forecasting failed: {e}")
         auto_prediction_results["forecasting"] = {"error": str(e)}
 
+    # ─── Deep Learning Auto-Prediction (Opsi B) ───
+    try:
+        from app.ml.model_loader_dl import (
+            predict_classification as predict_classification_dl,
+            predict_forecasting as predict_forecasting_dl
+        )
+        from app.services.prediction_service import PredictionService
+
+        # 1. DL Classification
+        try:
+            features_dl = {
+                'Hari Ke-': hari_ke,
+                'Suhu': data.temperature,
+                'Kelembaban': data.humidity,
+                'Amoniak': data.amonia,
+                'Pakan': today_log.pakan if today_log and today_log.pakan is not None else 0,
+                'Minum': today_log.minum if today_log and today_log.minum is not None else 0,
+                'Bobot': today_log.bobot if today_log and today_log.bobot is not None else 0,
+                'Populasi': today_populasi if today_populasi is not None else 0,
+                'Luas Kandang': kandang.kapasitas / 10 if kandang.kapasitas else 120,
+                'Hour': sensor_data.timestamp.hour,
+            }
+            cls_dl_result = predict_classification_dl(features_dl)
+            auto_prediction_results["classification_dl"] = {
+                "prediction": cls_dl_result['class'],
+                "confidence": cls_dl_result['confidence'],
+                "is_abnormal": cls_dl_result['class'] == 'Abnormal',
+            }
+
+            try:
+                prediction_svc = PredictionService(db)
+                await prediction_svc.save_classification(
+                    kandang_id=kandang.id,
+                    prediction=cls_dl_result['class'],
+                    confidence=cls_dl_result['confidence'],
+                    input_data={"suhu": data.temperature, "kelembaban": data.humidity, "amoniak": data.amonia, "hari_ke": hari_ke, "source": "iot_auto_dl"},
+                    sensor_data_id=sensor_data.id,
+                    model_type="dl",
+                )
+            except Exception as log_dl_err:
+                logger.warning(f"IoT classification DL save failed: {log_dl_err}")
+
+            if cls_dl_result['class'] == 'Abnormal':
+                try:
+                    notification_service = NotificationService(db)
+                    await notification_service.create_classification_alert(
+                        kandang_id=kandang.id,
+                        prediction=cls_dl_result['class'],
+                        sensor_data=features_dl,
+                    )
+                except Exception as notif_err:
+                    logger.warning(f"IoT classification DL notification failed: {notif_err}")
+        except Exception as cls_dl_err:
+            logger.warning(f"IoT auto-classification DL failed: {cls_dl_err}")
+            auto_prediction_results["classification_dl"] = {"error": str(cls_dl_err)}
+
+        # 2. DL Forecasting
+        try:
+            from app.models.prediction import Prediction
+            from sqlalchemy import select as sa_select, desc as sa_desc
+
+            last_fc_dl_result = await db.execute(
+                sa_select(Prediction.created_at)
+                .where(Prediction.kandang_id == kandang.id, Prediction.type == "forecasting", Prediction.model_type == "dl")
+                .order_by(sa_desc(Prediction.created_at))
+                .limit(1)
+            )
+            last_fc_dl_time = last_fc_dl_result.scalar_one_or_none()
+            forecast_dl_cooldown_ok = (
+                last_fc_dl_time is None or
+                (datetime.utcnow() - last_fc_dl_time.replace(tzinfo=None)) >= timedelta(minutes=30)
+            )
+
+            recent_dl_data = await sensor_service.get_latest_at_interval(kandang_id=kandang.id, n_points=4, interval_minutes=30)
+            if len(recent_dl_data) >= 4 and forecast_dl_cooldown_ok:
+                sensor_dl_history = [
+                    {'temp': sd.suhu, 'hum': sd.kelembaban, 'ammo': sd.amoniak, 'Death': sd.death or 0}
+                    for sd in recent_dl_data[-4:]
+                ]
+                fc_dl_result = predict_forecasting_dl(sensor_dl_history)
+                auto_prediction_results["forecasting_dl"] = {
+                    "predicted_death": fc_dl_result['predicted_death'],
+                    "has_risk": fc_dl_result['predicted_death'] > 0,
+                }
+
+                try:
+                    prediction_svc = PredictionService(db)
+                    await prediction_svc.save_forecasting(
+                        kandang_id=kandang.id,
+                        predicted_death=fc_dl_result['predicted_death'],
+                        raw_prediction=fc_dl_result['raw_prediction'],
+                        input_data={"sensor_history": sensor_dl_history, "source": "iot_auto_dl"},
+                        sensor_data_id=sensor_data.id,
+                        model_type="dl",
+                    )
+                except Exception as fc_dl_save_err:
+                    logger.warning(f"IoT forecasting DL save failed: {fc_dl_save_err}")
+
+                if fc_dl_result['predicted_death'] > 1:
+                    try:
+                        notification_service = NotificationService(db)
+                        await notification_service.create_death_forecast_alert(
+                            kandang_id=kandang.id,
+                            predicted_death=fc_dl_result['predicted_death'],
+                            raw_prediction=fc_dl_result['raw_prediction'],
+                        )
+                    except Exception as notif_err:
+                        logger.warning(f"IoT forecast DL notification failed: {notif_err}")
+            else:
+                auto_prediction_results["forecasting_dl"] = {"skipped": True, "reason": "Cooldown or insufficient points"}
+        except Exception as fc_dl_err:
+            logger.warning(f"IoT auto-forecasting DL failed: {fc_dl_err}")
+            auto_prediction_results["forecasting_dl"] = {"error": str(fc_dl_err)}
+
+    except Exception as dl_wrapper_err:
+        logger.warning(f"DL Auto-Prediction wrapper failed: {dl_wrapper_err}")
+
     try:
         from app.services.notification_service import manager
         await manager.broadcast_all({
@@ -293,6 +410,108 @@ async def create_sensor_data(
     except Exception as e:
         logger.warning(f"Auto-forecasting failed: {e}")
         auto_prediction_results["forecasting"] = {"error": str(e)}
+
+    # ─── Deep Learning Auto-Prediction (Opsi B) ───
+    try:
+        from app.ml.model_loader_dl import (
+            predict_classification as predict_classification_dl,
+            predict_forecasting as predict_forecasting_dl
+        )
+        from app.services.prediction_service import PredictionService
+
+        # 1. DL Classification (Manual)
+        try:
+            features_dl = {
+                'Hari Ke-': data.hari_ke,
+                'Suhu': data.suhu,
+                'Kelembaban': data.kelembaban,
+                'Amoniak': data.amoniak,
+                'Pakan': data.pakan or 0,
+                'Minum': data.minum or 0,
+                'Bobot': data.bobot or 0,
+                'Populasi': data.populasi or 0,
+                'Luas Kandang': kandang.kapasitas / 10 if kandang.kapasitas else 120,
+                'Hour': sensor_data.timestamp.hour if sensor_data.timestamp else 12,
+            }
+            cls_dl_result = predict_classification_dl(features_dl)
+            auto_prediction_results["classification_dl"] = {
+                "prediction": cls_dl_result['class'],
+                "confidence": cls_dl_result['confidence'],
+                "is_abnormal": cls_dl_result['class'] == 'Abnormal',
+            }
+
+            try:
+                prediction_svc = PredictionService(db)
+                await prediction_svc.save_classification(
+                    kandang_id=kandang.id,
+                    prediction=cls_dl_result['class'],
+                    confidence=cls_dl_result['confidence'],
+                    input_data={"suhu": data.suhu, "kelembaban": data.kelembaban, "amoniak": data.amoniak, "hari_ke": data.hari_ke, "source": "manual_dl"},
+                    sensor_data_id=sensor_data.id,
+                    model_type="dl",
+                )
+            except Exception as log_dl_err:
+                logger.warning(f"Manual classification DL save failed: {log_dl_err}")
+
+            if cls_dl_result['class'] == 'Abnormal':
+                try:
+                    notification_service = NotificationService(db)
+                    await notification_service.create_classification_alert(
+                        kandang_id=kandang.id,
+                        prediction=cls_dl_result['class'],
+                        sensor_data=features_dl,
+                    )
+                except Exception as notif_err:
+                    logger.warning(f"Manual classification DL notification failed: {notif_err}")
+        except Exception as cls_dl_err:
+            logger.warning(f"Manual auto-classification DL failed: {cls_dl_err}")
+            auto_prediction_results["classification_dl"] = {"error": str(cls_dl_err)}
+
+        # 2. DL Forecasting (Manual)
+        try:
+            recent_dl_data = await sensor_service.get_latest(kandang_id=kandang.id, limit=4)
+            if len(recent_dl_data) >= 4:
+                sensor_dl_history = [
+                    {'temp': sd.suhu, 'hum': sd.kelembaban, 'ammo': sd.amoniak, 'Death': sd.death or 0}
+                    for sd in recent_dl_data[-4:]
+                ]
+                fc_dl_result = predict_forecasting_dl(sensor_dl_history)
+                auto_prediction_results["forecasting_dl"] = {
+                    "predicted_death": fc_dl_result['predicted_death'],
+                    "has_risk": fc_dl_result['predicted_death'] > 0,
+                }
+
+                try:
+                    prediction_svc = PredictionService(db)
+                    await prediction_svc.save_forecasting(
+                        kandang_id=kandang.id,
+                        predicted_death=fc_dl_result['predicted_death'],
+                        raw_prediction=fc_dl_result['raw_prediction'],
+                        input_data={"sensor_history": sensor_dl_history, "source": "manual_dl"},
+                        sensor_data_id=sensor_data.id,
+                        model_type="dl",
+                    )
+                except Exception as fc_dl_save_err:
+                    logger.warning(f"Manual forecasting DL save failed: {fc_dl_save_err}")
+
+                if fc_dl_result['predicted_death'] > 1:
+                    try:
+                        notification_service = NotificationService(db)
+                        await notification_service.create_death_forecast_alert(
+                            kandang_id=kandang.id,
+                            predicted_death=fc_dl_result['predicted_death'],
+                            raw_prediction=fc_dl_result['raw_prediction'],
+                        )
+                    except Exception as notif_err:
+                        logger.warning(f"Manual forecast DL notification failed: {notif_err}")
+            else:
+                auto_prediction_results["forecasting_dl"] = {"skipped": True, "reason": f"Need 4+ points, have {len(recent_dl_data)}"}
+        except Exception as fc_dl_err:
+            logger.warning(f"Manual auto-forecasting DL failed: {fc_dl_err}")
+            auto_prediction_results["forecasting_dl"] = {"error": str(fc_dl_err)}
+
+    except Exception as dl_wrapper_err:
+        logger.warning(f"DL Auto-Prediction manual wrapper failed: {dl_wrapper_err}")
 
     try:
         from app.services.notification_service import manager
@@ -418,5 +637,3 @@ async def get_sensor_stats(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tidak ada data sensor dalam periode yang diminta")
 
     return success_response(data=stats, message=f"Statistik {hours} jam terakhir")
-
-    return success_response(data={"deleted_id": str(sensor_data_id)}, message="Data sensor berhasil dihapus")
