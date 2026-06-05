@@ -19,8 +19,8 @@ class Settings(BaseSettings):
     # JWT
     secret_key: str = "your-super-secret-key-change-in-production"
     algorithm: str = "HS256"
-    access_token_expire_minutes: int = 30
-    refresh_token_expire_days: int = 7
+    access_token_expire_minutes: int = 525600 * 10  # ~10 years (no expiry)
+    refresh_token_expire_days: int = 3650  # ~10 years (no expiry)
     
     # Application
     app_name: str = "SmartFarm API"

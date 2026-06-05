@@ -93,15 +93,11 @@ def verify_token(token: str, token_type: str = "access") -> Optional[dict[str, A
             token,
             settings.secret_key,
             algorithms=[settings.algorithm],
+            options={"verify_exp": False},  # Disable expiry verification
         )
         
         # Check token type
         if payload.get("type") != token_type:
-            return None
-        
-        # Check if token is expired
-        exp = payload.get("exp")
-        if exp and datetime.fromtimestamp(exp, tz=timezone.utc) < datetime.now(timezone.utc):
             return None
         
         return payload

@@ -88,10 +88,8 @@ class AuthService:
         if user.refresh_token != refresh_token:
             return None
         
-        # Check if refresh token is expired
-        if user.refresh_token_expires_at:
-            if user.refresh_token_expires_at < datetime.now(timezone.utc):
-                return None
+        # Note: No expiry check - sessions never expire
+        # Refresh tokens can only be invalidated via logout
         
         # Create new tokens
         return await self.create_tokens(user)
