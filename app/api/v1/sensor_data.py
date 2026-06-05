@@ -197,7 +197,7 @@ async def create_sensor_data_iot(
                 'Hari Ke-': hari_ke,
                 'Suhu': data.temperature,
                 'Kelembaban': data.humidity,
-                'Amoniak': data.amonia,
+                'Amoniak': data.ammonia,
                 'Pakan': today_log.pakan if today_log and today_log.pakan is not None else 0,
                 'Minum': today_log.minum if today_log and today_log.minum is not None else 0,
                 'Bobot': today_log.bobot if today_log and today_log.bobot is not None else 0,
