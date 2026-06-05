@@ -218,7 +218,7 @@ async def create_sensor_data_iot(
                     kandang_id=kandang.id,
                     prediction=cls_dl_result['class'],
                     confidence=cls_dl_result['confidence'],
-                    input_data={"suhu": data.temperature, "kelembaban": data.humidity, "amoniak": data.amonia, "hari_ke": hari_ke, "source": "iot_auto_dl"},
+                    input_data={"suhu": data.temperature, "kelembaban": data.humidity, "amoniak": data.ammonia, "hari_ke": hari_ke, "source": "iot_auto_dl"},
                     sensor_data_id=sensor_data.id,
                     model_type="dl",
                 )
